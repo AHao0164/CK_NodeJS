@@ -29,6 +29,12 @@ function authMiddleware(req, res, next) {
   const publicPaths = [
     { method: 'POST', path: /^\/auth\/signup$/ },
     { method: 'POST', path: /^\/auth\/login$/ },
+    { method: 'POST', path: /^\/auth\/guest$/ },
+    { method: 'POST', path: /^\/auth\/forgot-password$/ },
+    { method: 'POST', path: /^\/auth\/reset-password$/ },
+    { method: 'GET', path: /^\/auth\/verify-reset-token/ },
+    { method: 'GET', path: /^\/auth\/google/ },
+    { method: 'GET', path: /^\/auth\/facebook/ },
     { method: 'GET', path: /^\/catalog\// },
     { method: 'GET', path: /^\/uploads\// },
   ];
@@ -124,9 +130,20 @@ async function proxy(req, res, baseUrl) {
       // Use arraybuffer to support both JSON and binary (images) transparently
       responseType: 'arraybuffer',
       validateStatus: () => true,
+      maxRedirects: 0, // Don't follow redirects automatically
     });
+    
+    // Handle redirects manually - pass them through to the client
+    if (response.status >= 300 && response.status < 400 && response.headers.location) {
+      return res.redirect(response.status, response.headers.location);
+    }
+    
     res.status(response.status).set(response.headers).send(response.data);
   } catch (err) {
+    // Handle redirect errors from axios
+    if (err.response && err.response.status >= 300 && err.response.status < 400) {
+      return res.redirect(err.response.status, err.response.headers.location);
+    }
     res.status(502).json({ error: 'Upstream error' });
   }
 }
