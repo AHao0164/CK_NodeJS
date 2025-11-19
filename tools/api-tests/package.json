@@ -1,0 +1,16 @@
+{
+  "name": "api-tests",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node run-tests.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "form-data": "^4.0.0"
+  }
+}
+
+
+
