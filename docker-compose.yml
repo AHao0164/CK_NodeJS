@@ -1,0 +1,140 @@
+version: '3.9'
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      - MYSQL_ROOT_PASSWORD=rootpw
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-prootpw"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  phpmyadmin:
+    image: phpmyadmin:5
+    environment:
+      - PMA_HOST=mysql
+      - PMA_PORT=3306
+      - PMA_USER=root
+      - PMA_PASSWORD=rootpw
+      - UPLOAD_LIMIT=128M
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "8081:80"
+
+  api-gateway:
+    build: ./gateway/api-gateway
+    environment:
+      - PORT=8080
+      - AUTH_SERVICE_URL=http://auth-service:3001
+      - CATALOG_SERVICE_URL=http://catalog-service:3002
+      - CART_SERVICE_URL=http://cart-service:3003
+      - ORDER_SERVICE_URL=http://order-service:3004
+      - PAYMENT_SERVICE_URL=http://payment-service:3005
+      - JWT_SECRET=devsecret
+    depends_on:
+      - auth-service
+      - catalog-service
+      - cart-service
+      - order-service
+      - payment-service
+    ports:
+      - "8080:8080"
+
+  auth-service:
+    build: ./services/auth-service
+    environment:
+      - PORT=3001
+      - DB_HOST=mysql
+      - DB_USER=root
+      - DB_PASSWORD=rootpw
+      - DB_DATABASE=auth_db
+      - JWT_SECRET=devsecret
+      - ADMIN_SEED_EMAIL=admin@example.com
+      - ADMIN_SEED_PASSWORD=Admin!23456
+      - ADMIN_SEED_FULLNAME=Site Admin
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  catalog-service:
+    build: ./services/catalog-service
+    environment:
+      - PORT=3002
+      - DB_HOST=mysql
+      - DB_USER=root
+      - DB_PASSWORD=rootpw
+      - DB_DATABASE=catalog_db
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - ./services/catalog-service/uploads:/app/uploads
+
+  cart-service:
+    build: ./services/cart-service
+    environment:
+      - PORT=3003
+      - DB_HOST=mysql
+      - DB_USER=root
+      - DB_PASSWORD=rootpw
+      - DB_DATABASE=cart_db
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  order-service:
+    build: ./services/order-service
+    environment:
+      - PORT=3004
+      - DB_HOST=mysql
+      - DB_USER=root
+      - DB_PASSWORD=rootpw
+      - DB_DATABASE=order_db
+      - PAYMENT_SERVICE_URL=http://payment-service:3005
+      - CATALOG_SERVICE_URL=http://catalog-service:3002
+      - AUTH_SERVICE_URL=http://auth-service:3001
+    depends_on:
+      mysql:
+        condition: service_healthy
+      payment-service:
+        condition: service_started
+
+  payment-service:
+    build: ./services/payment-service
+    environment:
+      - PORT=3005
+      - BANK_ACC=0123456789
+      - BANK_CODE=VCB
+      - QR_TEMPLATE=compact
+
+  webapp:
+    build: ./webapp
+    environment:
+      - VITE_API_BASE=http://localhost:8080
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api-gateway
+
+  adminapp:
+    build: ./adminapp
+    environment:
+      - VITE_API_BASE=http://localhost:8080
+    ports:
+      - "5174:5174"
+    depends_on:
+      - api-gateway
+
+networks:
+  default:
+    driver: bridge
+
+
