@@ -4,14 +4,224 @@ import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import mysql from 'mysql2/promise';
+import passport from 'passport';
+import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
+import { Strategy as FacebookStrategy } from 'passport-facebook';
+import nodemailer from 'nodemailer';
+import crypto from 'crypto';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(passport.initialize());
 app.use(morgan('dev'));
 
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'devsecret';
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+const GOOGLE_CALLBACK_URL = process.env.GOOGLE_CALLBACK_URL || 'http://localhost:8080/auth/google/callback';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+const FACEBOOK_APP_ID = process.env.FACEBOOK_APP_ID || '';
+const FACEBOOK_APP_SECRET = process.env.FACEBOOK_APP_SECRET || '';
+const FACEBOOK_CALLBACK_URL = process.env.FACEBOOK_CALLBACK_URL || 'http://localhost:8080/auth/facebook/callback';
+
+const EMAIL_HOST = process.env.EMAIL_HOST || 'smtp.gmail.com';
+const EMAIL_PORT = parseInt(process.env.EMAIL_PORT || '587');
+const EMAIL_USER = process.env.EMAIL_USER || '';
+const EMAIL_PASS = process.env.EMAIL_PASS || '';
+const EMAIL_FROM = process.env.EMAIL_FROM || EMAIL_USER;
+
+let transporter = null;
+if (EMAIL_USER && EMAIL_PASS) {
+  transporter = nodemailer.createTransport({
+    host: EMAIL_HOST,
+    port: EMAIL_PORT,
+    secure: EMAIL_PORT === 465,
+    auth: {
+      user: EMAIL_USER,
+      pass: EMAIL_PASS
+    }
+  });
+
+  // Test email configuration
+  transporter.verify((error, success) => {
+    if (error) {
+      console.error('Email configuration error:', error);
+    } else {
+      console.log('Email server ready');
+    }
+  });
+}
+
+// Hàm gửi email
+async function sendResetEmail(email, token) {
+  if (!transporter) {
+    throw new Error('Email service not configured');
+  }
+
+  const resetLink = `${FRONTEND_URL}/reset-password?token=${token}`;
+  
+  const mailOptions = {
+    from: `"CK-NodeJS Shop" <${EMAIL_FROM}>`,
+    to: email,
+    subject: 'Đặt lại mật khẩu - CK-NodeJS Shop',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2>Yêu cầu đặt lại mật khẩu</h2>
+        <p>Bạn đã yêu cầu đặt lại mật khẩu cho tài khoản của mình.</p>
+        <p>Click vào nút bên dưới để đặt lại mật khẩu:</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${resetLink}" 
+             style="background-color: #4CAF50; 
+                    color: white; 
+                    padding: 12px 30px; 
+                    text-decoration: none; 
+                    border-radius: 4px;
+                    display: inline-block;">
+            Đặt lại mật khẩu
+          </a>
+        </div>
+        <p>Hoặc copy link sau vào trình duyệt:</p>
+        <p style="word-break: break-all; color: #666;">${resetLink}</p>
+        <p><strong>Lưu ý:</strong></p>
+        <ul>
+          <li>Link này chỉ có hiệu lực trong 1 giờ</li>
+          <li>Nếu bạn không yêu cầu đặt lại mật khẩu, vui lòng bỏ qua email này</li>
+        </ul>
+        <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;">
+        <p style="color: #999; font-size: 12px;">
+          Email này được gửi từ CK-NodeJS Shop. Vui lòng không trả lời email này.
+        </p>
+      </div>
+    `
+  };
+
+  await transporter.sendMail(mailOptions);
+}
+
+// Thêm routes (sau các routes hiện có)
+
+// POST /auth/forgot-password - Gửi email reset password
+app.post('/auth/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    // Kiểm tra user tồn tại
+    const [users] = await pool.query('SELECT id, email FROM users WHERE email = ?', [email]);
+    
+    if (users.length === 0) {
+      // Không tiết lộ email không tồn tại (security best practice)
+      return res.json({ message: 'If email exists, reset link will be sent' });
+    }
+
+    const user = users[0];
+
+    // Tạo reset token
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 3600000); // 1 hour
+
+    // Lưu token vào database
+    await pool.query(
+      'INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?, ?, ?)',
+      [user.id, token, expiresAt]
+    );
+
+    // Gửi email
+    try {
+      await sendResetEmail(email, token);
+      res.json({ message: 'Reset password email sent' });
+    } catch (emailError) {
+      console.error('Failed to send email:', emailError);
+      res.status(500).json({ error: 'Failed to send email' });
+    }
+
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /auth/reset-password - Đặt lại mật khẩu với token
+app.post('/auth/reset-password', async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+
+    if (!token || !newPassword) {
+      return res.status(400).json({ error: 'Token and new password are required' });
+    }
+
+    // Validate password strength
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+
+    // Tìm token trong database
+    const [tokens] = await pool.query(
+      'SELECT * FROM password_reset_tokens WHERE token = ? AND used = 0 AND expires_at > NOW()',
+      [token]
+    );
+
+    if (tokens.length === 0) {
+      return res.status(400).json({ error: 'Invalid or expired token' });
+    }
+
+    const resetToken = tokens[0];
+
+    // Hash password mới
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Cập nhật password
+    await pool.query(
+      'UPDATE users SET password_hash = ? WHERE id = ?',
+      [hashedPassword, resetToken.user_id]
+    );
+
+    // Đánh dấu token đã sử dụng
+    await pool.query(
+      'UPDATE password_reset_tokens SET used = 1 WHERE id = ?',
+      [resetToken.id]
+    );
+
+    res.json({ message: 'Password reset successfully' });
+
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /auth/verify-reset-token - Kiểm tra token còn hợp lệ không
+app.get('/auth/verify-reset-token', async (req, res) => {
+  try {
+    const { token } = req.query;
+
+    if (!token) {
+      return res.status(400).json({ valid: false, error: 'Token is required' });
+    }
+
+    const [tokens] = await pool.query(
+      'SELECT * FROM password_reset_tokens WHERE token = ? AND used = 0 AND expires_at > NOW()',
+      [token]
+    );
+
+    if (tokens.length === 0) {
+      return res.json({ valid: false });
+    }
+
+    res.json({ valid: true });
+
+  } catch (error) {
+    console.error('Verify token error:', error);
+    res.status(500).json({ valid: false, error: 'Server error' });
+  }
+});
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
@@ -37,6 +247,110 @@ async function waitForDatabase(maxRetries = 30, delay = 1000) {
     }
   }
   throw new Error('Could not connect to database after maximum retries');
+}
+
+if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
+  passport.use(new GoogleStrategy({
+    clientID: GOOGLE_CLIENT_ID,
+    clientSecret: GOOGLE_CLIENT_SECRET,
+    callbackURL: GOOGLE_CALLBACK_URL,
+    scope: ['profile', 'email']
+  }, async (accessToken, refreshToken, profile, done) => {
+    try {
+      const email = profile.emails[0].value;
+      const fullName = profile.displayName;
+      const oauthProvider = 'google';
+      const oauthId = profile.id;
+
+      // Tìm user theo oauth_provider và oauth_id
+      let [users] = await pool.query(
+        'SELECT * FROM users WHERE oauth_provider = ? AND oauth_id = ?',
+        [oauthProvider, oauthId]
+      );
+
+      let user;
+      if (users.length > 0) {
+        // User đã tồn tại
+        user = users[0];
+      } else {
+        // Kiểm tra xem email đã tồn tại chưa (có thể đã đăng ký bằng email/password)
+        [users] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
+        
+        if (users.length > 0) {
+          // Link OAuth với tài khoản hiện có
+          user = users[0];
+          await pool.query(
+            'UPDATE users SET oauth_provider = ?, oauth_id = ? WHERE id = ?',
+            [oauthProvider, oauthId, user.id]
+          );
+        } else {
+          // Tạo user mới
+          const [result] = await pool.query(
+            'INSERT INTO users (email, full_name, oauth_provider, oauth_id, password_hash) VALUES (?, ?, ?, ?, ?)',
+            [email, fullName, oauthProvider, oauthId, ''] // password_hash rỗng cho OAuth users
+          );
+          user = { id: result.insertId, email, full_name: fullName };
+        }
+      }
+
+      return done(null, user);
+    } catch (error) {
+      console.error('Google OAuth error:', error);
+      return done(error, null);
+    }
+  }));
+}
+
+if (FACEBOOK_APP_ID && FACEBOOK_APP_SECRET) {
+  passport.use(new FacebookStrategy({
+    clientID: FACEBOOK_APP_ID,
+    clientSecret: FACEBOOK_APP_SECRET,
+    callbackURL: FACEBOOK_CALLBACK_URL,
+    profileFields: ['id', 'emails', 'name', 'displayName']
+  }, async (accessToken, refreshToken, profile, done) => {
+    try {
+      // Email có thể không có nếu user không cấp quyền
+      const email = profile.emails && profile.emails[0] ? profile.emails[0].value : `fb_${profile.id}@facebook.oauth`;
+      const fullName = profile.displayName;
+      const oauthProvider = 'facebook';
+      const oauthId = profile.id;
+
+      // Tìm user theo oauth_provider và oauth_id
+      let [users] = await pool.query(
+        'SELECT * FROM users WHERE oauth_provider = ? AND oauth_id = ?',
+        [oauthProvider, oauthId]
+      );
+
+      let user;
+      if (users.length > 0) {
+        user = users[0];
+      } else {
+        // Kiểm tra email đã tồn tại chưa
+        [users] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
+        
+        if (users.length > 0) {
+          // Link OAuth với tài khoản hiện có
+          user = users[0];
+          await pool.query(
+            'UPDATE users SET oauth_provider = ?, oauth_id = ? WHERE id = ?',
+            [oauthProvider, oauthId, user.id]
+          );
+        } else {
+          // Tạo user mới
+          const [result] = await pool.query(
+            'INSERT INTO users (email, full_name, oauth_provider, oauth_id, password_hash) VALUES (?, ?, ?, ?, ?)',
+            [email, fullName, oauthProvider, oauthId, '']
+          );
+          user = { id: result.insertId, email, full_name: fullName };
+        }
+      }
+
+      return done(null, user);
+    } catch (error) {
+      console.error('Facebook OAuth error:', error);
+      return done(error, null);
+    }
+  }));
 }
 
 // Ensure initial admin user if env provided
@@ -427,6 +741,64 @@ app.get('/admin/users', async (req, res) => {
 });
 
 app.get('/health', (req, res) => res.json({ ok: true }));
+
+app.get('/auth/google', 
+  passport.authenticate('google', { 
+    session: false,
+    scope: ['profile', 'email'] 
+  })
+);
+
+app.get('/auth/google/callback',
+  passport.authenticate('google', { 
+    session: false,
+    failureRedirect: `${FRONTEND_URL}/login?error=oauth_failed` 
+  }),
+  (req, res) => {
+    try {
+      // Tạo JWT token với format giống login thường
+      const token = jwt.sign(
+        { sub: req.user.id, email: req.user.email, role: req.user.role || 'USER' },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      // Redirect về frontend với token
+      res.redirect(`${FRONTEND_URL}/login?token=${token}&email=${encodeURIComponent(req.user.email)}`);
+    } catch (error) {
+      console.error('Token generation error:', error);
+      res.redirect(`${FRONTEND_URL}/login?error=token_failed`);
+    }
+  }
+);
+
+app.get('/auth/facebook',
+  passport.authenticate('facebook', { 
+    session: false,
+    scope: ['public_profile'] 
+  })
+);
+
+app.get('/auth/facebook/callback',
+  passport.authenticate('facebook', { 
+    session: false,
+    failureRedirect: `${FRONTEND_URL}/login?error=oauth_failed` 
+  }),
+  (req, res) => {
+    try {
+      const token = jwt.sign(
+        { userId: req.user.id, email: req.user.email },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      res.redirect(`${FRONTEND_URL}/login?token=${token}&email=${encodeURIComponent(req.user.email)}`);
+    } catch (error) {
+      console.error('Token generation error:', error);
+      res.redirect(`${FRONTEND_URL}/login?error=token_failed`);
+    }
+  }
+);
 
 app.listen(PORT, () => {
   // eslint-disable-next-line no-console
