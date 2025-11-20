@@ -63,23 +63,35 @@ async function ensureSchema() {
     await ensureColumn('orders', 'billing_address', 'billing_address VARCHAR(512)');
     await ensureColumn('orders', 'coupon_code', 'coupon_code VARCHAR(50)');
     await ensureColumn('orders', 'discount_cents', 'discount_cents INT NOT NULL DEFAULT 0');
+    await ensureColumn('orders', 'guest_email', 'guest_email VARCHAR(255)');
+
+    // Modify user_id to allow NULL for guest orders
+    await conn.query('ALTER TABLE orders MODIFY COLUMN user_id BIGINT').catch(() => {});
 
     // Create coupons table if not exists
     await conn.query(`CREATE TABLE IF NOT EXISTS coupons (
       id BIGINT PRIMARY KEY AUTO_INCREMENT,
-      code VARCHAR(50) NOT NULL UNIQUE,
+      code VARCHAR(5) NOT NULL UNIQUE,
       type ENUM('percentage','fixed','freeship') NOT NULL,
       value INT NOT NULL DEFAULT 0,
       active TINYINT(1) NOT NULL DEFAULT 1,
+      usage_limit INT NOT NULL DEFAULT 10,
+      usage_count INT NOT NULL DEFAULT 0,
       start_date DATE,
-      end_date DATE
+      end_date DATE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     )`);
 
-    // Seed a few coupons if missing
-    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, start_date, end_date) VALUES ('SUMMER10','percentage',10,1,CURDATE(), DATE_ADD(CURDATE(), INTERVAL 365 DAY))");
-    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, start_date, end_date) VALUES ('SALE100K','fixed',100000,1,CURDATE(), DATE_ADD(CURDATE(), INTERVAL 365 DAY))");
-    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, start_date, end_date) VALUES ('FREESHIP','freeship',0,1,CURDATE(), DATE_ADD(CURDATE(), INTERVAL 365 DAY))");
-    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, start_date, end_date) VALUES ('SUMMER2024','percentage',15,1,CURDATE(), DATE_ADD(CURDATE(), INTERVAL 365 DAY))");
+    // Ensure usage_limit and usage_count columns exist in existing tables
+    await ensureColumn('coupons', 'usage_limit', 'usage_limit INT NOT NULL DEFAULT 10');
+    await ensureColumn('coupons', 'usage_count', 'usage_count INT NOT NULL DEFAULT 0');
+
+    // Seed a few coupons if missing (5-character codes with usage limits)
+    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, usage_limit, start_date, end_date) VALUES ('SUM10','percentage',10,1,10,CURDATE(), DATE_ADD(CURDATE(), INTERVAL 365 DAY))");
+    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, usage_limit, start_date, end_date) VALUES ('SAL50','fixed',50000,1,10,CURDATE(), DATE_ADD(CURDATE(), INTERVAL 365 DAY))");
+    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, usage_limit, start_date, end_date) VALUES ('SHIP0','freeship',0,1,10,CURDATE(), DATE_ADD(CURDATE(), INTERVAL 365 DAY))");
+    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, usage_limit, start_date, end_date) VALUES ('VIP20','percentage',20,1,5,CURDATE(), DATE_ADD(CURDATE(), INTERVAL 365 DAY))");
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error('ensureSchema failed', e);
@@ -111,6 +123,9 @@ app.post('/orders/checkout', async (req, res) => {
   if (!userId && !guestEmail) {
     errors.push('Vui lòng đăng nhập hoặc cung cấp email');
   }
+  if (guestEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guestEmail)) {
+    errors.push('Email không hợp lệ');
+  }
   if (!Array.isArray(items) || items.length === 0) errors.push('Giỏ hàng trống');
   if (Array.isArray(items)) {
     for (const it of items) {
@@ -125,37 +140,68 @@ app.post('/orders/checkout', async (req, res) => {
   }
   if (errors.length) return res.status(400).json({ error: 'VALIDATION_ERROR', details: errors });
   
-  // Handle guest checkout: create or find user by email
+  // Handle guest checkout: check if email already has an account
   if (!userId && guestEmail) {
     try {
-      // Call auth service to get or create guest user
+      // Call auth service to check if user exists
       const authServiceUrl = process.env.AUTH_SERVICE_URL || 'http://auth-service:3001';
-      const { data } = await axios.post(`${authServiceUrl}/auth/guest`, {
-        email: guestEmail,
-        fullName: shipping.name || 'Guest User'
-      });
-      userId = data.userId;
+      const { data } = await axios.get(`${authServiceUrl}/auth/check-email?email=${encodeURIComponent(guestEmail)}`);
+      if (data.exists && data.userId) {
+        userId = data.userId;
+      }
+      // If user doesn't exist, leave userId as null and use guest_email
     } catch (e) {
-      return res.status(500).json({ error: 'Không thể tạo tài khoản guest', details: [e.message] });
+      // Continue as guest if auth service check fails
+      console.error('Auth service check failed:', e.message);
     }
   }
   
-  const totalCents = items.reduce((sum, it) => sum + (it.priceCents * it.quantity), 0);
+  const subtotalCents = items.reduce((sum, it) => sum + (it.priceCents * it.quantity), 0);
+  const shippingCents = subtotalCents > 0 ? 3000000 : 0; // 30,000 VND fixed shipping
+  const taxCents = Math.floor(subtotalCents * 0.1); // 10% VAT
+  const totalCents = subtotalCents + shippingCents + taxCents;
+  
   let discountCents = 0;
   let appliedCoupon = null;
   if (couponCode) {
+    // Validate 5-character alphanumeric format
+    if (!/^[A-Z0-9]{5}$/i.test(couponCode)) {
+      return res.status(400).json({ error: 'INVALID_COUPON', details: ['Mã giảm giá phải là chuỗi 5 ký tự chữ và số'] });
+    }
     try {
-      const [[c]] = await pool.query(
-        'SELECT * FROM coupons WHERE code = ? AND active = 1 AND (start_date IS NULL OR start_date <= CURDATE()) AND (end_date IS NULL OR end_date >= CURDATE())',
-        [couponCode]
-      );
-      if (!c) return res.status(400).json({ error: 'INVALID_COUPON', details: ['Mã giảm giá không hợp lệ hoặc đã hết hạn'] });
-      appliedCoupon = c;
-      if (c.type === 'percentage') discountCents = Math.floor((totalCents * c.value) / 100);
-      if (c.type === 'fixed') discountCents = Math.min(totalCents, c.value);
-      if (c.type === 'freeship') discountCents = 0; // phí ship 0 đã mặc định
+      const conn2 = await pool.getConnection();
+      try {
+        await conn2.beginTransaction();
+        const [[c]] = await conn2.query(
+          'SELECT * FROM coupons WHERE UPPER(code) = UPPER(?) AND active = 1 AND (start_date IS NULL OR start_date <= CURDATE()) AND (end_date IS NULL OR end_date >= CURDATE()) FOR UPDATE',
+          [couponCode]
+        );
+        if (!c) {
+          await conn2.rollback();
+          return res.status(400).json({ error: 'INVALID_COUPON', details: ['Mã giảm giá không hợp lệ hoặc đã hết hạn'] });
+        }
+        // Check usage limit
+        if (c.usage_count >= c.usage_limit) {
+          await conn2.rollback();
+          return res.status(400).json({ error: 'COUPON_EXHAUSTED', details: ['Mã giảm giá đã hết lượt sử dụng'] });
+        }
+        appliedCoupon = c;
+        if (c.type === 'percentage') discountCents = Math.floor((subtotalCents * c.value) / 100);
+        if (c.type === 'fixed') discountCents = Math.min(totalCents, c.value);
+        if (c.type === 'freeship') discountCents = shippingCents; // Miễn phí vận chuyển
+        
+        // Increment usage count
+        await conn2.query('UPDATE coupons SET usage_count = usage_count + 1 WHERE id = ?', [c.id]);
+        await conn2.commit();
+      } catch (e) {
+        await conn2.rollback();
+        throw e;
+      } finally {
+        conn2.release();
+      }
     } catch (e) {
       // continue without coupon
+      console.error('Coupon validation error:', e);
     }
   }
   const conn = await pool.getConnection();
@@ -163,12 +209,12 @@ app.post('/orders/checkout', async (req, res) => {
     await conn.beginTransaction();
     const [orderResult] = await conn.query(
       `INSERT INTO orders 
-        (user_id, status, total_cents,
+        (user_id, guest_email, status, total_cents,
          shipping_name, shipping_phone, shipping_address, shipping_city, shipping_district, shipping_ward,
          billing_name, billing_phone, billing_address,
          coupon_code, discount_cents)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
-      [userId, 'PENDING', totalCents,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
+      [userId || null, (!userId && guestEmail) ? guestEmail : null, 'PENDING', totalCents,
        shipping.name || null, shipping.phone || null, shipping.address || null, shipping.city || null, shipping.district || null, shipping.ward || null,
        billing.name || null, billing.phone || null, billing.address || null,
        appliedCoupon ? appliedCoupon.code : null, discountCents]
@@ -258,12 +304,19 @@ app.get('/orders', async (req, res) => {
 app.get('/orders/coupons/:code', async (req, res) => {
   try {
     const { code } = req.params;
+    // Validate 5-character alphanumeric format
+    if (!/^[A-Z0-9]{5}$/i.test(code)) {
+      return res.status(400).json({ error: 'INVALID_FORMAT', message: 'Mã giảm giá phải là chuỗi 5 ký tự chữ và số' });
+    }
     const [[c]] = await pool.query(
-      'SELECT code, type, value FROM coupons WHERE UPPER(code) = UPPER(?) AND active = 1 AND (start_date IS NULL OR start_date <= CURDATE()) AND (end_date IS NULL OR end_date >= CURDATE())',
+      'SELECT code, type, value, usage_count, usage_limit FROM coupons WHERE UPPER(code) = UPPER(?) AND active = 1 AND (start_date IS NULL OR start_date <= CURDATE()) AND (end_date IS NULL OR end_date >= CURDATE())',
       [code]
     );
-    if (!c) return res.status(404).json({ error: 'INVALID_COUPON' });
-    return res.json(c);
+    if (!c) return res.status(404).json({ error: 'INVALID_COUPON', message: 'Mã giảm giá không hợp lệ hoặc đã hết hạn' });
+    if (c.usage_count >= c.usage_limit) {
+      return res.status(400).json({ error: 'COUPON_EXHAUSTED', message: 'Mã giảm giá đã hết lượt sử dụng', remaining: 0 });
+    }
+    return res.json({ ...c, remaining: c.usage_limit - c.usage_count });
   } catch (e) {
     return res.status(500).json({ error: 'Server error' });
   }
@@ -271,16 +324,29 @@ app.get('/orders/coupons/:code', async (req, res) => {
 
 // Admin: coupons CRUD
 app.get('/admin/coupons', async (req, res) => {
-  const [rows] = await pool.query('SELECT id, code, type, value, active, start_date, end_date FROM coupons ORDER BY id DESC LIMIT 500');
+  const [rows] = await pool.query('SELECT id, code, type, value, active, usage_limit, usage_count, start_date, end_date FROM coupons ORDER BY id DESC LIMIT 500');
   return res.json(rows);
 });
 
 app.post('/admin/coupons', async (req, res) => {
-  const { code, type, value = 0, active = 1, startDate = null, endDate = null } = req.body || {};
+  const { code, type, value = 0, active = 1, usageLimit = 10, startDate = null, endDate = null } = req.body || {};
   const allowed = ['percentage', 'fixed', 'freeship'];
-  if (!code || !allowed.includes(type)) return res.status(400).json({ error: 'Invalid payload' });
+  
+  // Validate code format: exactly 5 alphanumeric characters
+  if (!code || !/^[A-Z0-9]{5}$/i.test(code)) {
+    return res.status(400).json({ error: 'Mã giảm giá phải là chuỗi 5 ký tự chữ và số' });
+  }
+  
+  if (!allowed.includes(type)) return res.status(400).json({ error: 'Invalid type' });
+  
+  // Validate usage limit (max 10)
+  const limit = Math.min(Math.max(1, parseInt(usageLimit) || 10), 10);
+  
   try {
-    await pool.query('INSERT INTO coupons (code, type, value, active, start_date, end_date) VALUES (UPPER(?), ?, ?, ?, ?, ?)', [code, type, value, active ? 1 : 0, startDate, endDate]);
+    await pool.query(
+      'INSERT INTO coupons (code, type, value, active, usage_limit, start_date, end_date) VALUES (UPPER(?), ?, ?, ?, ?, ?, ?)', 
+      [code, type, value, active ? 1 : 0, limit, startDate, endDate]
+    );
     return res.status(201).json({ ok: true });
   } catch (e) {
     if (e && e.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Coupon already exists' });
@@ -290,13 +356,26 @@ app.post('/admin/coupons', async (req, res) => {
 
 app.put('/admin/coupons/:id', async (req, res) => {
   const { id } = req.params;
-  const { code, type, value, active, startDate, endDate } = req.body || {};
+  const { code, type, value, active, usageLimit, startDate, endDate } = req.body || {};
   const fields = [];
   const params = [];
-  if (code) { fields.push('code = UPPER(?)'); params.push(code); }
+  
+  if (code) {
+    // Validate code format: exactly 5 alphanumeric characters
+    if (!/^[A-Z0-9]{5}$/i.test(code)) {
+      return res.status(400).json({ error: 'Mã giảm giá phải là chuỗi 5 ký tự chữ và số' });
+    }
+    fields.push('code = UPPER(?)'); 
+    params.push(code);
+  }
   if (type) { fields.push('type = ?'); params.push(type); }
   if (value !== undefined) { fields.push('value = ?'); params.push(value); }
   if (active !== undefined) { fields.push('active = ?'); params.push(active ? 1 : 0); }
+  if (usageLimit !== undefined) { 
+    const limit = Math.min(Math.max(1, parseInt(usageLimit) || 10), 10);
+    fields.push('usage_limit = ?'); 
+    params.push(limit); 
+  }
   if (startDate !== undefined) { fields.push('start_date = ?'); params.push(startDate); }
   if (endDate !== undefined) { fields.push('end_date = ?'); params.push(endDate); }
   if (fields.length === 0) return res.json({ ok: true });

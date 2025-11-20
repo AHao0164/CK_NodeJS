@@ -86,6 +86,38 @@ CREATE TABLE IF NOT EXISTS product_images (
   sort_order INT DEFAULT 0,
   FOREIGN KEY (product_id) REFERENCES products(id)
 );
+
+-- Product variants (e.g., different colors, sizes, configurations)
+CREATE TABLE IF NOT EXISTS product_variants (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  product_id BIGINT NOT NULL,
+  variant_name VARCHAR(255) NOT NULL,
+  variant_value VARCHAR(255) NOT NULL,
+  price_adjustment_cents INT DEFAULT 0,
+  stock INT NOT NULL DEFAULT 0,
+  sku VARCHAR(100),
+  is_available TINYINT(1) DEFAULT 1,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+  INDEX idx_product_id (product_id)
+);
+
+-- Product reviews and ratings
+CREATE TABLE IF NOT EXISTS product_reviews (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  product_id BIGINT NOT NULL,
+  user_id BIGINT,
+  rating INT CHECK (rating >= 1 AND rating <= 5),
+  comment TEXT,
+  author_name VARCHAR(255),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+  INDEX idx_product_id (product_id),
+  INDEX idx_user_id (user_id),
+  INDEX idx_created_at (created_at)
+);
+
 CREATE TABLE IF NOT EXISTS inventory (
   product_id BIGINT PRIMARY KEY,
   stock INT NOT NULL DEFAULT 0,
@@ -96,9 +128,11 @@ CREATE TABLE IF NOT EXISTS inventory (
 USE cart_db;
 CREATE TABLE IF NOT EXISTS carts (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  user_id BIGINT NOT NULL,
+  user_id BIGINT,
+  session_id VARCHAR(255),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY unique_user (user_id)
+  UNIQUE KEY unique_user (user_id),
+  INDEX idx_session (session_id)
 );
 CREATE TABLE IF NOT EXISTS cart_items (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -115,7 +149,8 @@ CREATE TABLE IF NOT EXISTS cart_items (
 USE order_db;
 CREATE TABLE IF NOT EXISTS orders (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  user_id BIGINT NOT NULL,
+  user_id BIGINT,
+  guest_email VARCHAR(255),
   status ENUM('PENDING','PAID','CANCELLED','SHIPPING','DELIVERED') NOT NULL DEFAULT 'PENDING',
   total_cents INT NOT NULL,
   shipping_name VARCHAR(255),
@@ -135,24 +170,31 @@ CREATE TABLE IF NOT EXISTS orders (
 -- Coupons
 CREATE TABLE IF NOT EXISTS coupons (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  code VARCHAR(50) NOT NULL UNIQUE,
+  code VARCHAR(5) NOT NULL UNIQUE,
   type ENUM('percentage','fixed','freeship') NOT NULL,
   value INT NOT NULL DEFAULT 0,
   active TINYINT(1) NOT NULL DEFAULT 1,
+  usage_limit INT NOT NULL DEFAULT 10,
+  usage_count INT NOT NULL DEFAULT 0,
   start_date DATE,
-  end_date DATE
+  end_date DATE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
--- Seed some coupons
-INSERT INTO coupons (code, type, value, active, start_date, end_date)
-VALUES ('SUMMER10', 'percentage', 10, 1, CURDATE(), DATE_ADD(CURDATE(), INTERVAL 365 DAY))
+-- Seed some coupons (5-character alphanumeric codes with usage limits)
+INSERT INTO coupons (code, type, value, active, usage_limit, start_date, end_date)
+VALUES ('SUM10', 'percentage', 10, 1, 10, CURDATE(), DATE_ADD(CURDATE(), INTERVAL 365 DAY))
 ON DUPLICATE KEY UPDATE value=VALUES(value);
-INSERT INTO coupons (code, type, value, active, start_date, end_date)
-VALUES ('SALE100K', 'fixed', 100000, 1, CURDATE(), DATE_ADD(CURDATE(), INTERVAL 365 DAY))
+INSERT INTO coupons (code, type, value, active, usage_limit, start_date, end_date)
+VALUES ('SAL50', 'fixed', 50000, 1, 10, CURDATE(), DATE_ADD(CURDATE(), INTERVAL 365 DAY))
 ON DUPLICATE KEY UPDATE value=VALUES(value);
-INSERT INTO coupons (code, type, value, active, start_date, end_date)
-VALUES ('FREESHIP', 'freeship', 0, 1, CURDATE(), DATE_ADD(CURDATE(), INTERVAL 365 DAY))
+INSERT INTO coupons (code, type, value, active, usage_limit, start_date, end_date)
+VALUES ('SHIP0', 'freeship', 0, 1, 10, CURDATE(), DATE_ADD(CURDATE(), INTERVAL 365 DAY))
 ON DUPLICATE KEY UPDATE active=VALUES(active);
+INSERT INTO coupons (code, type, value, active, usage_limit, start_date, end_date)
+VALUES ('VIP20', 'percentage', 20, 1, 5, CURDATE(), DATE_ADD(CURDATE(), INTERVAL 365 DAY))
+ON DUPLICATE KEY UPDATE value=VALUES(value);
 
 CREATE TABLE IF NOT EXISTS order_items (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -290,4 +332,140 @@ UPDATE products SET is_bestseller = 1, sales_count = 135 WHERE name = 'Lenovo Le
 UPDATE products SET is_bestseller = 1, sales_count = 110 WHERE name = 'Asus TUF A15';
 UPDATE products SET is_bestseller = 1, sales_count = 95 WHERE name = 'HP Pavilion 15';
 UPDATE products SET is_bestseller = 1, sales_count = 105 WHERE name = 'Lenovo IdeaPad Slim 5';
+
+-- Seed Product Variants (at least 2 variants per product)
+-- MacBook Air M2 13" variants
+INSERT INTO product_variants (product_id, variant_name, variant_value, price_adjustment_cents, stock, sku)
+SELECT p.id, 'Color', 'Space Gray', 0, 15, 'MBA-M2-13-SG'
+FROM products p WHERE p.name = 'MacBook Air M2 13"';
+
+INSERT INTO product_variants (product_id, variant_name, variant_value, price_adjustment_cents, stock, sku)
+SELECT p.id, 'Color', 'Silver', 0, 12, 'MBA-M2-13-SL'
+FROM products p WHERE p.name = 'MacBook Air M2 13"';
+
+INSERT INTO product_variants (product_id, variant_name, variant_value, price_adjustment_cents, stock, sku)
+SELECT p.id, 'Storage', '256GB', 0, 20, 'MBA-M2-13-256'
+FROM products p WHERE p.name = 'MacBook Air M2 13"';
+
+INSERT INTO product_variants (product_id, variant_name, variant_value, price_adjustment_cents, stock, sku)
+SELECT p.id, 'Storage', '512GB', 500000, 15, 'MBA-M2-13-512'
+FROM products p WHERE p.name = 'MacBook Air M2 13"';
+
+-- MacBook Air M3 15" variants
+INSERT INTO product_variants (product_id, variant_name, variant_value, price_adjustment_cents, stock, sku)
+SELECT p.id, 'Color', 'Midnight', 0, 10, 'MBA-M3-15-MN'
+FROM products p WHERE p.name = 'MacBook Air M3 15"';
+
+INSERT INTO product_variants (product_id, variant_name, variant_value, price_adjustment_cents, stock, sku)
+SELECT p.id, 'Color', 'Starlight', 0, 8, 'MBA-M3-15-ST'
+FROM products p WHERE p.name = 'MacBook Air M3 15"';
+
+-- Dell XPS 13 variants
+INSERT INTO product_variants (product_id, variant_name, variant_value, price_adjustment_cents, stock, sku)
+SELECT p.id, 'RAM', '16GB', 0, 15, 'XPS13-16GB'
+FROM products p WHERE p.name = 'Dell XPS 13';
+
+INSERT INTO product_variants (product_id, variant_name, variant_value, price_adjustment_cents, stock, sku)
+SELECT p.id, 'RAM', '32GB', 800000, 8, 'XPS13-32GB'
+FROM products p WHERE p.name = 'Dell XPS 13';
+
+-- Dell G15 Gaming variants
+INSERT INTO product_variants (product_id, variant_name, variant_value, price_adjustment_cents, stock, sku)
+SELECT p.id, 'GPU', 'RTX 3050', 0, 12, 'G15-3050'
+FROM products p WHERE p.name = 'Dell G15 Gaming';
+
+INSERT INTO product_variants (product_id, variant_name, variant_value, price_adjustment_cents, stock, sku)
+SELECT p.id, 'GPU', 'RTX 3060', 400000, 10, 'G15-3060'
+FROM products p WHERE p.name = 'Dell G15 Gaming';
+
+-- Lenovo ThinkPad X1 Carbon variants
+INSERT INTO product_variants (product_id, variant_name, variant_value, price_adjustment_cents, stock, sku)
+SELECT p.id, 'Processor', 'i5-1340P', 0, 10, 'X1C-i5'
+FROM products p WHERE p.name = 'Lenovo ThinkPad X1 Carbon';
+
+INSERT INTO product_variants (product_id, variant_name, variant_value, price_adjustment_cents, stock, sku)
+SELECT p.id, 'Processor', 'i7-1360P', 600000, 8, 'X1C-i7'
+FROM products p WHERE p.name = 'Lenovo ThinkPad X1 Carbon';
+
+-- HP Spectre x360 variants
+INSERT INTO product_variants (product_id, variant_name, variant_value, price_adjustment_cents, stock, sku)
+SELECT p.id, 'Display', 'FHD Touch', 0, 12, 'SPX360-FHD'
+FROM products p WHERE p.name = 'HP Spectre x360';
+
+INSERT INTO product_variants (product_id, variant_name, variant_value, price_adjustment_cents, stock, sku)
+SELECT p.id, 'Display', '4K OLED', 700000, 6, 'SPX360-4K'
+FROM products p WHERE p.name = 'HP Spectre x360';
+
+-- Add more variants for other products
+INSERT INTO product_variants (product_id, variant_name, variant_value, price_adjustment_cents, stock, sku)
+SELECT p.id, 'Color', 'Black', 0, 15, CONCAT('VAR-', p.id, '-BLK')
+FROM products p WHERE p.name IN ('Lenovo Legion 5', 'Asus TUF A15', 'HP Pavilion 15');
+
+INSERT INTO product_variants (product_id, variant_name, variant_value, price_adjustment_cents, stock, sku)
+SELECT p.id, 'Color', 'Gray', 0, 12, CONCAT('VAR-', p.id, '-GRY')
+FROM products p WHERE p.name IN ('Lenovo Legion 5', 'Asus TUF A15', 'HP Pavilion 15');
+
+-- Seed Product Reviews (mix of logged-in users and anonymous)
+-- Reviews for MacBook Air M2 13"
+INSERT INTO product_reviews (product_id, user_id, rating, comment, author_name)
+SELECT p.id, 1, 5, 'Excellent laptop! The M2 chip is incredibly fast and the battery life is amazing. Perfect for daily work and creative tasks.', 'Admin User'
+FROM products p WHERE p.name = 'MacBook Air M2 13"';
+
+INSERT INTO product_reviews (product_id, user_id, rating, comment, author_name)
+SELECT p.id, NULL, 4, 'Great performance and build quality. A bit expensive but worth it for the reliability.', 'Anonymous Buyer'
+FROM products p WHERE p.name = 'MacBook Air M2 13"';
+
+INSERT INTO product_reviews (product_id, user_id, rating, comment, author_name)
+SELECT p.id, 2, 5, 'Love this MacBook! Super lightweight and the screen quality is stunning. Highly recommended.', 'Le Doan Anh Hao'
+FROM products p WHERE p.name = 'MacBook Air M2 13"';
+
+-- Reviews for Dell XPS 13
+INSERT INTO product_reviews (product_id, user_id, rating, comment, author_name)
+SELECT p.id, NULL, 5, 'Best Windows ultrabook out there. Beautiful display and excellent keyboard.', 'Tech Enthusiast'
+FROM products p WHERE p.name = 'Dell XPS 13';
+
+INSERT INTO product_reviews (product_id, user_id, rating, comment, author_name)
+SELECT p.id, NULL, 4, 'Solid build quality and great performance. Battery could be better.', 'John Smith'
+FROM products p WHERE p.name = 'Dell XPS 13';
+
+-- Reviews for Dell G15 Gaming
+INSERT INTO product_reviews (product_id, user_id, rating, comment, author_name)
+SELECT p.id, 1, 4, 'Good gaming laptop for the price. Handles most games at high settings.', 'Admin User'
+FROM products p WHERE p.name = 'Dell G15 Gaming';
+
+INSERT INTO product_reviews (product_id, user_id, rating, comment, author_name)
+SELECT p.id, NULL, 5, 'Amazing value for money! Runs all my games smoothly. Cooling is decent too.', 'Gamer123'
+FROM products p WHERE p.name = 'Dell G15 Gaming';
+
+-- Reviews for Lenovo ThinkPad X1 Carbon
+INSERT INTO product_reviews (product_id, user_id, rating, comment, author_name)
+SELECT p.id, NULL, 5, 'Best business laptop! The keyboard is phenomenal and it\'s so light.', 'Business Pro'
+FROM products p WHERE p.name = 'Lenovo ThinkPad X1 Carbon';
+
+INSERT INTO product_reviews (product_id, user_id, rating, comment, author_name)
+SELECT p.id, NULL, 4, 'Great for productivity. Battery lasts all day. Build quality is top-notch.', 'Office Worker'
+FROM products p WHERE p.name = 'Lenovo ThinkPad X1 Carbon';
+
+-- Reviews for HP Spectre x360
+INSERT INTO product_reviews (product_id, user_id, rating, comment, author_name)
+SELECT p.id, NULL, 5, 'Beautiful convertible laptop! The 2-in-1 design is very practical and the display is gorgeous.', 'Sarah Lee'
+FROM products p WHERE p.name = 'HP Spectre x360';
+
+INSERT INTO product_reviews (product_id, user_id, rating, comment, author_name)
+SELECT p.id, 2, 4, 'Premium build and features. Touch screen works great. A bit heavy for tablet mode though.', 'Le Doan Anh Hao'
+FROM products p WHERE p.name = 'HP Spectre x360';
+
+-- More reviews for popular products
+INSERT INTO product_reviews (product_id, user_id, rating, comment, author_name)
+SELECT p.id, NULL, 5, 'Incredible gaming performance! The RTX graphics card handles everything I throw at it.', 'Pro Gamer'
+FROM products p WHERE p.name = 'Lenovo Legion 5';
+
+INSERT INTO product_reviews (product_id, user_id, rating, comment, author_name)
+SELECT p.id, NULL, 4, 'Good laptop for students. Battery life is decent and performance is adequate for everyday tasks.', 'Student User'
+FROM products p WHERE p.name = 'Lenovo IdeaPad Slim 5';
+
+INSERT INTO product_reviews (product_id, user_id, rating, comment, author_name)
+SELECT p.id, NULL, 5, 'Best budget gaming laptop! Great value and runs games surprisingly well.', 'Budget Gamer'
+FROM products p WHERE p.name = 'Asus TUF A15';
+
 

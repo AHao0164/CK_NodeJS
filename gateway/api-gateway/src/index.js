@@ -30,18 +30,26 @@ function authMiddleware(req, res, next) {
     { method: 'POST', path: /^\/auth\/signup$/ },
     { method: 'POST', path: /^\/auth\/login$/ },
     { method: 'POST', path: /^\/auth\/guest$/ },
+    { method: 'GET', path: /^\/auth\/check-email/ },
     { method: 'POST', path: /^\/auth\/forgot-password$/ },
     { method: 'POST', path: /^\/auth\/reset-password$/ },
     { method: 'GET', path: /^\/auth\/verify-reset-token/ },
     { method: 'GET', path: /^\/auth\/google/ },
     { method: 'GET', path: /^\/auth\/facebook/ },
     { method: 'GET', path: /^\/catalog\// },
+    { method: 'POST', path: /^\/catalog\/products\/\d+\/reviews$/ },
     { method: 'GET', path: /^\/uploads\// },
   ];
   const isPublic = publicPaths.some(
     (r) => r.method === req.method && r.path.test(req.path)
   );
   if (isPublic) return next();
+
+  // Allow cart, checkout, and payment access with session ID for guest users
+  const sessionId = req.headers['x-session-id'];
+  if (sessionId && (req.path.startsWith('/cart') || req.path.startsWith('/orders/checkout') || req.path.match(/^\/orders\/\d+\/pay$/))) {
+    return next();
+  }
 
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
@@ -163,6 +171,7 @@ app.use('/payment', (req, res) => proxy(req, res, services.payment));
 // Admin routed proxies
 app.use('/admin/catalog', (req, res) => proxy(req, res, services.catalog));
 app.use('/admin/orders', (req, res) => proxy(req, res, services.order));
+app.use('/admin/coupons', (req, res) => proxy(req, res, services.order));
 app.use('/admin/users', (req, res) => proxy(req, res, services.auth));
 
 app.get('/health', (req, res) => res.json({ ok: true }));

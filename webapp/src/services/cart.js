@@ -20,5 +20,3 @@ export async function removeCartItem(api, { itemId }) {
 	return data
 }
 
-
-

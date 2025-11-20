@@ -19,6 +19,8 @@ export default function Checkout() {
   const [couponCode, setCouponCode] = useState('')
   const [coupon, setCoupon] = useState(null)
   const [error, setError] = useState('')
+  const [couponError, setCouponError] = useState('')
+  const [couponLoading, setCouponLoading] = useState(false)
   const [user, setUser] = useState(null)
   const [saveAsDefault, setSaveAsDefault] = useState(false)
   const [savedAddresses, setSavedAddresses] = useState([])
@@ -72,8 +74,12 @@ export default function Checkout() {
       const checkoutData = { 
         items, 
         shipping, 
-        billing, 
-        couponCode: coupon?.code || couponCode || undefined
+        billing
+      }
+      
+      // Only send coupon code if it's been validated
+      if (coupon && coupon.code) {
+        checkoutData.couponCode = coupon.code
       }
       
       if (!token && guestEmail) {
@@ -117,15 +123,39 @@ export default function Checkout() {
   }
 
   async function applyCoupon() {
-    if (!couponCode) return
+    if (!couponCode) {
+      setCouponError('Vui lòng nhập mã giảm giá')
+      return
+    }
+    
+    // Validate format: 5 alphanumeric characters
+    if (!/^[A-Z0-9]{5}$/i.test(couponCode)) {
+      setCouponError('Mã giảm giá phải là chuỗi 5 ký tự chữ và số')
+      setCoupon(null)
+      return
+    }
+    
+    setCouponLoading(true)
+    setCouponError('')
     try {
       const data = await validateCoupon(api, couponCode)
       setCoupon(data)
-      toast.show('✓ Áp dụng mã giảm giá thành công', { type: 'success' })
-    } catch (_) {
+      setCouponError('')
+      toast.show(`✓ Áp dụng mã ${data.code} thành công! Còn ${data.remaining} lượt sử dụng`, { type: 'success' })
+    } catch (e) {
       setCoupon(null)
-      setError('Mã giảm giá không hợp lệ hoặc đã hết hạn')
+      const msg = e?.response?.data?.message || e?.response?.data?.error || 'Mã giảm giá không hợp lệ hoặc đã hết hạn'
+      setCouponError(msg)
+    } finally {
+      setCouponLoading(false)
     }
+  }
+  
+  const removeCoupon = () => {
+    setCoupon(null)
+    setCouponCode('')
+    setCouponError('')
+    toast.show('Đã xóa mã giảm giá', { type: 'info' })
   }
   
   return (
@@ -255,22 +285,107 @@ export default function Checkout() {
         <div>
           <Card>
             <CardBody>
+              <h3 className="text-base font-semibold mb-4 text-slate-900 dark:text-slate-100">Tóm tắt đơn hàng</h3>
               <div className="space-y-2 text-sm">
-                <div className="flex justify-between"><span>Subtotal</span><span>{(total/100).toLocaleString()} ₫</span></div>
-                <div className="flex justify-between"><span>Shipping</span><span>0 ₫</span></div>
-                {discount > 0 && (
-                  <div className="flex justify-between text-emerald-700"><span>Discount ({coupon?.code})</span><span>-{(discount/100).toLocaleString()} ₫</span></div>
+                <div className="flex justify-between text-slate-700 dark:text-slate-300">
+                  <span>Tạm tính</span>
+                  <span>{(total/100).toLocaleString()} ₫</span>
+                </div>
+                <div className="flex justify-between text-slate-700 dark:text-slate-300">
+                  <span>Phí vận chuyển</span>
+                  <span>0 ₫</span>
+                </div>
+                {discount > 0 && coupon && (
+                  <div className="flex justify-between items-center text-emerald-600 dark:text-emerald-400">
+                    <span className="flex items-center gap-1">
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      Giảm giá ({coupon.code})
+                    </span>
+                    <span>-{(discount/100).toLocaleString()} ₫</span>
+                  </div>
                 )}
-                <div className="flex justify-between font-semibold"><span>Total</span><span>{((total-discount)/100).toLocaleString()} ₫</span></div>
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-700"></div>
+                <div className="flex justify-between font-semibold text-base text-slate-900 dark:text-slate-100">
+                  <span>Tổng cộng</span>
+                  <span className="text-primary">{((total-discount)/100).toLocaleString()} ₫</span>
+                </div>
               </div>
-              <div className="mt-3 flex gap-2">
-                <input className="h-11 flex-1 rounded-lg border border-slate-300 px-3 text-sm dark:bg-slate-800 dark:border-slate-700" placeholder="Coupon Code" value={couponCode} onChange={e=>setCouponCode(e.target.value.toUpperCase())} />
-                <Button onClick={applyCoupon} variant="outline">Apply</Button>
+              
+              {/* Coupon Section */}
+              <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
+                <label className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">
+                  Mã giảm giá
+                </label>
+                {!coupon ? (
+                  <>
+                    <div className="flex gap-2">
+                      <input 
+                        className="h-11 flex-1 rounded-lg border border-slate-300 px-3 text-sm dark:bg-slate-800 dark:border-slate-700 uppercase" 
+                        placeholder="Nhập mã (5 ký tự)" 
+                        maxLength={5}
+                        value={couponCode} 
+                        onChange={e=>setCouponCode(e.target.value.toUpperCase())}
+                        onKeyPress={e => e.key === 'Enter' && applyCoupon()}
+                      />
+                      <Button 
+                        onClick={applyCoupon} 
+                        variant="outline"
+                        disabled={couponLoading || !couponCode}
+                      >
+                        {couponLoading ? 'Kiểm tra...' : 'Áp dụng'}
+                      </Button>
+                    </div>
+                    {couponError && (
+                      <div className="mt-2 flex items-start gap-1 text-xs text-red-600 dark:text-red-400">
+                        <svg className="h-4 w-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span>{couponError}</span>
+                      </div>
+                    )}
+                    <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                      💡 Mã giảm giá gồm 5 ký tự chữ và số
+                    </div>
+                  </>
+                ) : (
+                  <div className="p-3 bg-emerald-50 dark:bg-emerald-900/20 rounded-lg border border-emerald-200 dark:border-emerald-800">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-emerald-800 dark:text-emerald-200">
+                            {coupon.code}
+                          </span>
+                          <span className="px-2 py-0.5 text-xs bg-emerald-100 dark:bg-emerald-800 text-emerald-700 dark:text-emerald-300 rounded">
+                            {coupon.type === 'percentage' ? `${coupon.value}%` : 
+                             coupon.type === 'fixed' ? `${(coupon.value/100).toLocaleString()}₫` : 
+                             'Miễn phí ship'}
+                          </span>
+                        </div>
+                        <div className="mt-1 text-xs text-emerald-700 dark:text-emerald-300">
+                          ✓ Giảm {(discount/100).toLocaleString()} ₫ • Còn {coupon.remaining} lượt
+                        </div>
+                      </div>
+                      <button 
+                        onClick={removeCoupon}
+                        className="ml-2 text-emerald-600 hover:text-emerald-700 dark:text-emerald-400"
+                      >
+                        <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-              {error && <div className="mt-2 text-center text-xs text-red-600">{error}</div>}
-              <Button onClick={pay} className="mt-4 w-full" disabled={cart.items.length===0}>Confirm Payment</Button>
+              
+              {error && <div className="mt-3 text-center text-xs text-red-600 dark:text-red-400">{error}</div>}
+              <Button onClick={pay} className="mt-4 w-full" disabled={cart.items.length===0}>
+                Xác nhận thanh toán
+              </Button>
               {cart.items.length===0 && (
-                <div className="mt-2 text-center text-xs text-amber-600">Cart is empty — please add products before checkout</div>
+                <div className="mt-2 text-center text-xs text-amber-600">Giỏ hàng trống — vui lòng thêm sản phẩm trước khi thanh toán</div>
               )}
             </CardBody>
           </Card>

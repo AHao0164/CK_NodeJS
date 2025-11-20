@@ -31,7 +31,7 @@ export default function Orders() {
                   </div>
                   <span className={`rounded-full px-2.5 py-1 text-xs ${o.status==='PAID'?'bg-emerald-50 text-emerald-700 border border-emerald-200':'bg-slate-100 text-slate-700'}`}>{o.status}</span>
                 </div>
-                <div className="mt-3 text-lg font-semibold">{(o.total_cents/100).toLocaleString()} ₫</div>
+                <div className="mt-3 text-lg font-semibold">{((o.total_cents - (o.discount_cents || 0))/100).toLocaleString()} ₫</div>
                 <div className="mt-1 text-xs text-slate-500">{new Date(o.created_at || Date.now()).toLocaleString()}</div>
                 <a href={`/orders/${o.id}`} className="mt-3 inline-flex text-sm text-brand-600 hover:underline">Xem chi tiết</a>
               </CardBody>
