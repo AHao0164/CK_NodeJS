@@ -18,6 +18,7 @@ export default function OrderDetail() {
   if (!order) return <main className="container-page py-10"><p>Không tìm thấy đơn hàng.</p></main>
 
   const total = Number(order.total_cents || 0)
+  const discount = Number(order.discount_cents || 0)
   return (
     <main className="container-page py-10">
       <div className="mb-4 text-sm text-slate-500"><Link className="hover:underline" to="/orders">← Quay lại danh sách</Link></div>
@@ -55,7 +56,13 @@ export default function OrderDetail() {
             <div className="mb-4"><span className={`rounded-full px-2.5 py-1 text-xs ${order.status==='PAID'?'bg-emerald-50 text-emerald-700 border border-emerald-200':'bg-slate-100 text-slate-700'}`}>{order.status}</span></div>
             <div className="flex justify-between text-sm"><span>Tạm tính</span><span>{(total/100).toLocaleString()} ₫</span></div>
             <div className="flex justify-between text-sm"><span>Phí vận chuyển</span><span>0 ₫</span></div>
-            <div className="mt-2 flex justify-between text-sm font-semibold"><span>Tổng cộng</span><span>{(total/100).toLocaleString()} ₫</span></div>
+            {discount > 0 && order.coupon_code && (
+              <div className="flex justify-between text-sm text-emerald-600">
+                <span>Giảm giá ({order.coupon_code})</span>
+                <span>-{(discount/100).toLocaleString()} ₫</span>
+              </div>
+            )}
+            <div className="mt-2 flex justify-between text-sm font-semibold"><span>Tổng cộng</span><span>{((total-discount)/100).toLocaleString()} ₫</span></div>
             <div className="mt-6 text-sm">
               <div className="mb-2 text-slate-500">Địa chỉ giao hàng</div>
               <div className="space-y-1">

@@ -6,6 +6,7 @@ import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import { WebSocketServer } from 'ws';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -106,43 +107,90 @@ app.get('/catalog/products', async (req, res) => {
   const page = Math.max(parseInt(req.query.page || '1', 10), 1);
   const pageSize = Math.min(Math.max(parseInt(req.query.pageSize || '20', 10), 1), 100);
   const sort = String(req.query.sort || 'id_desc');
+  
+  // Filtering parameters
+  const brandIds = req.query.brandIds ? String(req.query.brandIds).split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id)) : [];
+  const categoryIds = req.query.categoryIds ? String(req.query.categoryIds).split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id)) : [];
+  const minPrice = req.query.minPrice ? parseInt(req.query.minPrice, 10) : null;
+  const maxPrice = req.query.maxPrice ? parseInt(req.query.maxPrice, 10) : null;
+  const minRating = req.query.minRating ? parseFloat(req.query.minRating) : null;
+  
   const sortSql =
     sort === 'price_asc' ? 'p.price_cents ASC' :
     sort === 'price_desc' ? 'p.price_cents DESC' :
     sort === 'name_asc' ? 'p.name ASC' :
     sort === 'name_desc' ? 'p.name DESC' :
+    sort === 'rating_desc' ? 'avg_rating DESC' :
     'p.id DESC';
 
   const offset = (page - 1) * pageSize;
   const whereClauses = [];
   const params = [];
+  
   if (q) {
     whereClauses.push('(p.name LIKE ? OR b.name LIKE ? OR c.name LIKE ?)');
     const like = `%${q}%`;
     params.push(like, like, like);
   }
+  
+  if (brandIds.length > 0) {
+    whereClauses.push(`p.brand_id IN (${brandIds.map(() => '?').join(',')})`);
+    params.push(...brandIds);
+  }
+  
+  if (categoryIds.length > 0) {
+    whereClauses.push(`p.category_id IN (${categoryIds.map(() => '?').join(',')})`);
+    params.push(...categoryIds);
+  }
+  
+  if (minPrice !== null) {
+    whereClauses.push('p.price_cents >= ?');
+    params.push(minPrice);
+  }
+  
+  if (maxPrice !== null) {
+    whereClauses.push('p.price_cents <= ?');
+    params.push(maxPrice);
+  }
+  
   const whereSql = whereClauses.length ? 'WHERE ' + whereClauses.join(' AND ') : '';
+  const havingSql = minRating ? 'HAVING avg_rating >= ?' : '';
+  const havingParams = minRating ? [minRating] : [];
 
   const [rows] = await pool.query(
     `SELECT p.id, p.name, p.description, p.price_cents, p.specs, p.image_url,
-            b.name AS brand, c.name AS category, i.stock
+            b.name AS brand, b.id AS brand_id, c.name AS category, c.id AS category_id, 
+            i.stock, IFNULL(AVG(r.rating), 0) AS avg_rating, COUNT(r.id) AS review_count
      FROM products p
      LEFT JOIN brands b ON b.id = p.brand_id
      LEFT JOIN categories c ON c.id = p.category_id
      LEFT JOIN inventory i ON i.product_id = p.id
+     LEFT JOIN product_reviews r ON r.product_id = p.id
      ${whereSql}
+     GROUP BY p.id, p.name, p.description, p.price_cents, p.specs, p.image_url, 
+              b.name, b.id, c.name, c.id, i.stock
+     ${havingSql}
      ORDER BY ${sortSql}
      LIMIT ? OFFSET ?`,
-    [...params, pageSize, offset]
+    [...params, ...havingParams, pageSize, offset]
   );
 
-  const [[{ total }]] = await pool.query(
-    `SELECT COUNT(*) AS total FROM products p 
-     LEFT JOIN brands b ON b.id = p.brand_id 
-     LEFT JOIN categories c ON c.id = p.category_id 
-     ${whereSql}`,
-    params
+  // Count total with subquery to handle GROUP BY + HAVING
+  const [countRows] = await pool.query(
+    `SELECT COUNT(*) AS total FROM (
+       SELECT p.id, IFNULL(AVG(r.rating), 0) AS avg_rating
+       FROM products p 
+       LEFT JOIN brands b ON b.id = p.brand_id 
+       LEFT JOIN categories c ON c.id = p.category_id 
+       LEFT JOIN product_reviews r ON r.product_id = p.id
+       ${whereSql}
+       GROUP BY p.id
+       ${havingSql}
+     ) AS filtered_products`,
+    [...params, ...havingParams]
   );
+  
+  const total = countRows[0]?.total || 0;
 
   return res.json({ items: rows, page, pageSize, total });
 });
@@ -151,7 +199,7 @@ app.get('/catalog/products/:id', async (req, res) => {
   const { id } = req.params;
   const [[product]] = await pool.query(
     `SELECT p.id, p.name, p.description, p.price_cents, p.specs,
-            b.name AS brand, c.name AS category
+            b.name AS brand, b.id AS brand_id, c.name AS category, c.id AS category_id
      FROM products p
      LEFT JOIN brands b ON b.id = p.brand_id
      LEFT JOIN categories c ON c.id = p.category_id
@@ -159,9 +207,42 @@ app.get('/catalog/products/:id', async (req, res) => {
     [id]
   );
   if (!product) return res.status(404).json({ error: 'Not found' });
+  
+  // Get product images
   const [images] = await pool.query('SELECT url, sort_order FROM product_images WHERE product_id = ? ORDER BY sort_order', [id]);
+  
+  // Get inventory
   const [[inv]] = await pool.query('SELECT stock FROM inventory WHERE product_id = ?', [id]);
-  return res.json({ ...product, images, stock: inv ? inv.stock : 0 });
+  
+  // Get product variants
+  const [variants] = await pool.query(
+    `SELECT id, variant_name, variant_value, price_adjustment_cents, stock, sku, is_available 
+     FROM product_variants WHERE product_id = ? ORDER BY variant_name, variant_value`,
+    [id]
+  );
+  
+  // Get product reviews with average rating
+  const [[ratingStats]] = await pool.query(
+    `SELECT IFNULL(AVG(rating), 0) AS avg_rating, COUNT(*) AS review_count
+     FROM product_reviews WHERE product_id = ?`,
+    [id]
+  );
+  
+  const [reviews] = await pool.query(
+    `SELECT id, user_id, rating, comment, author_name, created_at, updated_at
+     FROM product_reviews WHERE product_id = ? ORDER BY created_at DESC LIMIT 50`,
+    [id]
+  );
+  
+  return res.json({ 
+    ...product, 
+    images, 
+    stock: inv ? inv.stock : 0,
+    variants,
+    avg_rating: parseFloat(ratingStats.avg_rating),
+    review_count: ratingStats.review_count,
+    reviews
+  });
 });
 
 // Public: list categories with product counts (for featured categories on FE)
@@ -428,9 +509,174 @@ app.patch('/admin/catalog/inventory/:productId', async (req, res) => {
   return res.json({ ok: true });
 });
 
-app.listen(PORT, () => {
+// Public: Get all brands (for filtering)
+app.get('/catalog/brands', async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT b.id, b.name, COUNT(p.id) AS product_count
+       FROM brands b
+       LEFT JOIN products p ON p.brand_id = b.id
+       GROUP BY b.id, b.name
+       ORDER BY b.name ASC`
+    );
+    return res.json({ items: rows });
+  } catch (e) {
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Public: Get price range for filtering
+app.get('/catalog/price-range', async (req, res) => {
+  try {
+    const [[result]] = await pool.query(
+      `SELECT MIN(price_cents) AS min_price, MAX(price_cents) AS max_price FROM products`
+    );
+    return res.json(result);
+  } catch (e) {
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Public: Add product review (requires authentication for rating, but comment can be anonymous)
+app.post('/catalog/products/:id/reviews', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId, rating, comment, authorName } = req.body;
+    
+    // Validate: rating requires userId, but comment doesn't
+    if (rating && !userId) {
+      return res.status(400).json({ error: 'User must be logged in to rate products' });
+    }
+    
+    if (rating && (rating < 1 || rating > 5)) {
+      return res.status(400).json({ error: 'Rating must be between 1 and 5' });
+    }
+    
+    if (!comment && !rating) {
+      return res.status(400).json({ error: 'Must provide either comment or rating' });
+    }
+    
+    // Check if product exists
+    const [[product]] = await pool.query('SELECT id FROM products WHERE id = ?', [id]);
+    if (!product) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+    
+    // Insert review
+    const [result] = await pool.query(
+      `INSERT INTO product_reviews (product_id, user_id, rating, comment, author_name)
+       VALUES (?, ?, ?, ?, ?)`,
+      [id, userId || null, rating || null, comment || null, authorName || 'Anonymous']
+    );
+    
+    // Get the newly created review
+    const [[newReview]] = await pool.query(
+      `SELECT id, user_id, rating, comment, author_name, created_at, updated_at
+       FROM product_reviews WHERE id = ?`,
+      [result.insertId]
+    );
+    
+    // Broadcast to WebSocket clients
+    broadcastReviewUpdate(id, newReview);
+    
+    return res.status(201).json({ 
+      id: result.insertId,
+      review: newReview,
+      message: 'Review added successfully'
+    });
+  } catch (e) {
+    console.error('Add review error:', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Public: Get reviews for a product
+app.get('/catalog/products/:id/reviews', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 100);
+    const offset = Math.max(parseInt(req.query.offset || '0', 10), 0);
+    
+    const [reviews] = await pool.query(
+      `SELECT id, user_id, rating, comment, author_name, created_at, updated_at
+       FROM product_reviews 
+       WHERE product_id = ? 
+       ORDER BY created_at DESC 
+       LIMIT ? OFFSET ?`,
+      [id, limit, offset]
+    );
+    
+    const [[{ total }]] = await pool.query(
+      `SELECT COUNT(*) AS total FROM product_reviews WHERE product_id = ?`,
+      [id]
+    );
+    
+    return res.json({ items: reviews, total });
+  } catch (e) {
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+const server = app.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`Catalog service listening on ${PORT}`);
 });
+
+// WebSocket server for real-time review updates
+const wss = new WebSocketServer({ server, path: '/ws/reviews' });
+
+// Store active connections per product
+const productConnections = new Map();
+
+wss.on('connection', (ws, req) => {
+  console.log('New WebSocket connection');
+  
+  ws.on('message', (message) => {
+    try {
+      const data = JSON.parse(message.toString());
+      
+      // Subscribe to product reviews
+      if (data.type === 'subscribe' && data.productId) {
+        ws.productId = data.productId;
+        
+        if (!productConnections.has(data.productId)) {
+          productConnections.set(data.productId, new Set());
+        }
+        productConnections.get(data.productId).add(ws);
+        
+        console.log(`Client subscribed to product ${data.productId}`);
+        ws.send(JSON.stringify({ type: 'subscribed', productId: data.productId }));
+      }
+    } catch (e) {
+      console.error('WebSocket message error:', e);
+    }
+  });
+  
+  ws.on('close', () => {
+    if (ws.productId && productConnections.has(ws.productId)) {
+      productConnections.get(ws.productId).delete(ws);
+      if (productConnections.get(ws.productId).size === 0) {
+        productConnections.delete(ws.productId);
+      }
+    }
+  });
+});
+
+// Broadcast review update to all clients watching a product
+export function broadcastReviewUpdate(productId, review) {
+  if (productConnections.has(productId)) {
+    const message = JSON.stringify({
+      type: 'review_added',
+      productId,
+      review
+    });
+    
+    productConnections.get(productId).forEach(client => {
+      if (client.readyState === 1) { // OPEN
+        client.send(message);
+      }
+    });
+  }
+}
 
 

@@ -486,6 +486,23 @@ app.post('/auth/guest', async (req, res) => {
   }
 });
 
+// Check if email exists (for guest checkout)
+app.get('/auth/check-email', async (req, res) => {
+  const { email } = req.query;
+  if (!email) return res.status(400).json({ error: 'Email is required' });
+  
+  try {
+    const [rows] = await pool.execute('SELECT id, email, full_name FROM users WHERE email = ?', [email]);
+    if (rows[0]) {
+      return res.json({ exists: true, userId: rows[0].id, email: rows[0].email, fullName: rows[0].full_name });
+    }
+    return res.json({ exists: false });
+  } catch (e) {
+    console.error('Check email error:', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 app.get('/auth/me', async (req, res) => {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;

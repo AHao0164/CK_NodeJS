@@ -41,7 +41,6 @@ export default function Home() {
   }, [])
   
   async function add(p) {
-    if (!token) return alert('Vui lòng đăng nhập')
     try {
       await addItemToCart(api, { productId: p.id, quantity: 1, priceCents: p.price_cents })
       toast.show('✓ Đã thêm vào giỏ hàng', { type: 'success' })

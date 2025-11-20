@@ -5,8 +5,8 @@ export async function listOrders(api) {
   return data
 }
 
-export async function checkoutOrder(api, { items, shipping, billing }) {
-  const { data } = await api.post('/orders/checkout', { items, shipping, billing })
+export async function checkoutOrder(api, { items, shipping, billing, couponCode, guestEmail }) {
+  const { data } = await api.post('/orders/checkout', { items, shipping, billing, couponCode, guestEmail })
   return data
 }
 
