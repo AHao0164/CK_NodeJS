@@ -164,6 +164,8 @@ CREATE TABLE IF NOT EXISTS orders (
   billing_address VARCHAR(512),
   coupon_code VARCHAR(50),
   discount_cents INT NOT NULL DEFAULT 0,
+  loyalty_cents_used INT NOT NULL DEFAULT 0,
+  loyalty_cents_earned INT NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
@@ -203,6 +205,21 @@ CREATE TABLE IF NOT EXISTS order_items (
   quantity INT NOT NULL,
   price_cents INT NOT NULL,
   FOREIGN KEY (order_id) REFERENCES orders(id)
+);
+
+CREATE TABLE IF NOT EXISTS order_status_history (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  order_id BIGINT NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  note VARCHAR(255),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS user_loyalty_points (
+  user_id BIGINT PRIMARY KEY,
+  balance_cents BIGINT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
 -- Seed basic data
@@ -467,5 +484,29 @@ FROM products p WHERE p.name = 'Lenovo IdeaPad Slim 5';
 INSERT INTO product_reviews (product_id, user_id, rating, comment, author_name)
 SELECT p.id, NULL, 5, 'Best budget gaming laptop! Great value and runs games surprisingly well.', 'Budget Gamer'
 FROM products p WHERE p.name = 'Asus TUF A15';
+
+-- Seed product images (3 per product) using Unsplash placeholders
+INSERT INTO product_images (product_id, url, sort_order)
+SELECT p.id, 'https://images.unsplash.com/photo-1517336714731-489689fd1ca8?q=80&w=1200', 1 FROM products p;
+INSERT INTO product_images (product_id, url, sort_order)
+SELECT p.id, 'https://images.unsplash.com/photo-1496181133206-80ce9b88a853?q=80&w=1200', 2 FROM products p;
+INSERT INTO product_images (product_id, url, sort_order)
+SELECT p.id, 'https://images.unsplash.com/photo-1525547719571-a2d4ac8945e2?q=80&w=1200', 3 FROM products p;
+
+-- Ensure any product missing variants gets two default variants (Color: Black/Gray)
+INSERT INTO product_variants (product_id, variant_name, variant_value, price_adjustment_cents, stock, sku)
+SELECT p.id, 'Color', 'Black', 0, 20, CONCAT('DEF-', p.id, '-BLK')
+FROM products p WHERE p.id NOT IN (SELECT DISTINCT product_id FROM product_variants);
+
+INSERT INTO product_variants (product_id, variant_name, variant_value, price_adjustment_cents, stock, sku)
+SELECT p.id, 'Color', 'Gray', 0, 20, CONCAT('DEF-', p.id, '-GRY')
+FROM products p WHERE p.id NOT IN (SELECT DISTINCT product_id FROM product_variants);
+
+-- Expand product descriptions to ensure at least 5 lines for demo requirements
+UPDATE products SET description = CONCAT(description, '\n\n', 'Detailed overview: This product has been carefully selected for quality and performance. ',
+  'It includes up-to-date hardware, reliable battery life, and a robust warranty policy. ',
+  'Suitable for both personal and professional use. ',
+  'Please review specifications and customer feedback before purchase.')
+WHERE CHAR_LENGTH(description) < 200;
 
 
