@@ -1,7 +1,14 @@
 import { publicApi } from '../api/client'
 
-export async function listProducts({ q = '', page = 1, sort = 'id_desc' } = {}) {
-  const response = await publicApi.get('/catalog/products', { params: { q, page, sort } })
+export async function listProducts({ q = '', page = 1, sort = 'id_desc', brand = '', category = '', minPrice, maxPrice, minRating, pageSize = 20 } = {}) {
+  const params = { q, page, sort }
+  if (brand) params.brand = brand
+  if (category) params.category = category
+  if (minPrice !== undefined && minPrice !== null) params.minPrice = minPrice
+  if (maxPrice !== undefined && maxPrice !== null) params.maxPrice = maxPrice
+  if (minRating !== undefined && minRating !== null) params.minRating = minRating
+  if (pageSize) params.pageSize = pageSize
+  const response = await publicApi.get('/catalog/products', { params })
   return response.data
 }
 

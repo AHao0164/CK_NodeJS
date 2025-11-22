@@ -3,6 +3,7 @@ import morgan from 'morgan';
 import cors from 'cors';
 import mysql from 'mysql2/promise';
 import axios from 'axios';
+import nodemailer from 'nodemailer';
 
 const app = express();
 app.use(cors());
@@ -20,6 +21,173 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
 });
+
+const EMAIL_HOST = process.env.EMAIL_HOST || 'smtp.gmail.com';
+const EMAIL_PORT = parseInt(process.env.EMAIL_PORT || '587', 10);
+const EMAIL_USER = process.env.EMAIL_USER || '';
+const EMAIL_PASS = process.env.EMAIL_PASS || '';
+const EMAIL_FROM = process.env.EMAIL_FROM || EMAIL_USER || 'no-reply@ck-nodejs.com';
+
+let emailTransporter = null;
+if (EMAIL_USER && EMAIL_PASS) {
+  emailTransporter = nodemailer.createTransport({
+    host: EMAIL_HOST,
+    port: EMAIL_PORT,
+    secure: EMAIL_PORT === 465,
+    auth: { user: EMAIL_USER, pass: EMAIL_PASS }
+  });
+  emailTransporter.verify().catch(err => console.error('Email transporter verify failed', err));
+}
+
+function formatCurrency(cents) {
+  return new Intl.NumberFormat('vi-VN').format(Math.max(0, cents / 100)) + ' ₫';
+}
+
+function headerUserId(req) {
+  const value = req.headers['x-user-id'];
+  return value ? parseInt(value, 10) : null;
+}
+
+function headerUserRole(req) {
+  return req.headers['x-user-role'] || null;
+}
+
+async function insertStatusHistory(conn, orderId, status, note = null) {
+  await conn.query(
+    'INSERT INTO order_status_history (order_id, status, note) VALUES (?, ?, ?)',
+    [orderId, status, note]
+  );
+}
+
+async function getLoyaltyBalanceForUpdate(conn, userId) {
+  const [[row]] = await conn.query(
+    'SELECT balance_cents FROM user_loyalty_points WHERE user_id = ? FOR UPDATE',
+    [userId]
+  );
+  return row ? Number(row.balance_cents) : 0;
+}
+
+async function adjustLoyaltyBalance(userId, deltaCents, connParam = null) {
+  if (!userId || deltaCents === 0) return;
+  const conn = connParam || await pool.getConnection();
+  const manageTxn = !connParam;
+  try {
+    if (manageTxn) await conn.beginTransaction();
+    const [[row]] = await conn.query('SELECT balance_cents FROM user_loyalty_points WHERE user_id = ? FOR UPDATE', [userId]);
+    const current = row ? Number(row.balance_cents) : 0;
+    const next = Math.max(current + deltaCents, 0);
+    if (row) {
+      await conn.query('UPDATE user_loyalty_points SET balance_cents = ? WHERE user_id = ?', [next, userId]);
+    } else {
+      await conn.query('INSERT INTO user_loyalty_points (user_id, balance_cents) VALUES (?, ?)', [userId, next]);
+    }
+    if (manageTxn) await conn.commit();
+    return next;
+  } catch (e) {
+    if (manageTxn) await conn.rollback();
+    throw e;
+  } finally {
+    if (manageTxn) conn.release();
+  }
+}
+
+async function getLoyaltyBalance(userId) {
+  if (!userId) return 0;
+  const [[row]] = await pool.query('SELECT balance_cents FROM user_loyalty_points WHERE user_id = ?', [userId]);
+  return row ? Number(row.balance_cents) : 0;
+}
+
+async function fetchOrderDetail(orderId) {
+  const [[order]] = await pool.query('SELECT * FROM orders WHERE id = ?', [orderId]);
+  if (!order) return null;
+  if (order.user_id) {
+    const [[userRow]] = await pool.query('SELECT email FROM auth_db.users WHERE id = ?', [order.user_id]);
+    if (userRow) order.user_email = userRow.email;
+  }
+  const [items] = await pool.query(
+    `SELECT oi.*, p.name, p.brand, p.category, p.image_url
+     FROM order_items oi
+     LEFT JOIN products p ON p.id = oi.product_id
+     WHERE oi.order_id = ?`,
+    [orderId]
+  );
+  const [statusHistory] = await pool.query(
+    'SELECT status, note, created_at FROM order_status_history WHERE order_id = ? ORDER BY created_at DESC',
+    [orderId]
+  );
+  return { ...order, items, status_history: statusHistory };
+}
+
+async function sendOrderConfirmationEmail(orderDetails) {
+  if (!emailTransporter) {
+    console.warn('Email transporter not configured; skipping order email');
+    return;
+  }
+  const order = orderDetails.order;
+  const items = orderDetails.items || [];
+  const statusHistory = orderDetails.status_history || [];
+  const recipient = order.user_email || order.guest_email;
+  if (!recipient) return;
+  const rows = items.map((it) => `
+    <tr>
+      <td style="padding:8px;border:1px solid #ddd;">${it.product?.name || 'Unknown'}</td>
+      <td style="padding:8px;border:1px solid #ddd;">${it.quantity}</td>
+      <td style="padding:8px;border:1px solid #ddd;">${formatCurrency(it.price_cents)}</td>
+      <td style="padding:8px;border:1px solid #ddd;">${formatCurrency(it.price_cents * it.quantity)}</td>
+    </tr>
+  `).join('');
+  const statusRows = statusHistory.map((s) => `
+    <tr>
+      <td style="padding:6px;border:1px solid #ddd;">${s.status}</td>
+      <td style="padding:6px;border:1px solid #ddd;">${new Date(s.created_at).toLocaleString('vi-VN')}</td>
+      <td style="padding:6px;border:1px solid #ddd;">${s.note || '—'}</td>
+    </tr>
+  `).join('');
+  const html = `
+    <div style="font-family: Arial, sans-serif; color: #111;">
+      <h2>Đơn hàng #${order.id} đã được xác nhận</h2>
+      <p>Cảm ơn bạn đã mua hàng! Dưới đây là chi tiết đơn:</p>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
+        <thead>
+          <tr>
+            <th style="text-align:left;padding:8px;border:1px solid #ddd;">Sản phẩm</th>
+            <th style="text-align:left;padding:8px;border:1px solid #ddd;">Số lượng</th>
+            <th style="text-align:left;padding:8px;border:1px solid #ddd;">Đơn giá</th>
+            <th style="text-align:left;padding:8px;border:1px solid #ddd;">Tổng</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <p><strong>Tổng cộng:</strong> ${formatCurrency(order.total_cents)}</p>
+      ${order.coupon_code ? `<p>Mã giảm giá: ${order.coupon_code} (Giảm ${formatCurrency(order.discount_cents)})</p>` : ''}
+      ${order.loyalty_cents_used ? `<p>Đã dùng điểm: ${formatCurrency(order.loyalty_cents_used)}</p>` : ''}
+      ${order.loyalty_cents_earned ? `<p>Điểm nhận được: ${formatCurrency(order.loyalty_cents_earned)}</p>` : ''}
+      <h3>Lịch sử trạng thái</h3>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr>
+            <th style="padding:6px;border:1px solid #ddd;">Trạng thái</th>
+            <th style="padding:6px;border:1px solid #ddd;">Thời gian</th>
+            <th style="padding:6px;border:1px solid #ddd;">Ghi chú</th>
+          </tr>
+        </thead>
+        <tbody>${statusRows}</tbody>
+      </table>
+      <p style="margin-top:24px;">Trân trọng,</p>
+      <p>CK-NodeJS Shop</p>
+    </div>
+  `;
+  try {
+    await emailTransporter.sendMail({
+      from: `"CK-NodeJS Shop" <${EMAIL_FROM}>`,
+      to: recipient,
+      subject: `Xác nhận đơn hàng #${order.id} - CK-NodeJS Shop`,
+      html
+    });
+  } catch (emailError) {
+    console.error('Order confirmation email failed:', emailError);
+  }
+}
 
 // Wait for database to be ready
 async function waitForDatabase(maxRetries = 30, delay = 1000) {
@@ -64,9 +232,28 @@ async function ensureSchema() {
     await ensureColumn('orders', 'coupon_code', 'coupon_code VARCHAR(50)');
     await ensureColumn('orders', 'discount_cents', 'discount_cents INT NOT NULL DEFAULT 0');
     await ensureColumn('orders', 'guest_email', 'guest_email VARCHAR(255)');
+    await ensureColumn('orders', 'loyalty_cents_used', 'loyalty_cents_used INT NOT NULL DEFAULT 0');
+    await ensureColumn('orders', 'loyalty_cents_earned', 'loyalty_cents_earned INT NOT NULL DEFAULT 0');
 
     // Modify user_id to allow NULL for guest orders
     await conn.query('ALTER TABLE orders MODIFY COLUMN user_id BIGINT').catch(() => {});
+
+    // Create order status history table if not exists
+    await conn.query(`CREATE TABLE IF NOT EXISTS order_status_history (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      order_id BIGINT NOT NULL,
+      status VARCHAR(32) NOT NULL,
+      note VARCHAR(255),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+    )`);
+
+    // Create loyalty table if not exists
+    await conn.query(`CREATE TABLE IF NOT EXISTS user_loyalty_points (
+      user_id BIGINT PRIMARY KEY,
+      balance_cents BIGINT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )`);
 
     // Create coupons table if not exists
     await conn.query(`CREATE TABLE IF NOT EXISTS coupons (
@@ -117,9 +304,10 @@ app.post('/orders/checkout', async (req, res) => {
   const userIdHeader = req.headers['x-user-id'];
   let userId = userIdHeader ? parseInt(userIdHeader, 10) : null;
   const { items, shipping = {}, billing = {}, couponCode, guestEmail } = req.body;
+  let pointsToUseCents = Number(req.body.pointsToUseCents || 0);
+  if (!Number.isFinite(pointsToUseCents) || pointsToUseCents < 0) pointsToUseCents = 0;
   const errors = [];
   
-  // Allow guest checkout with email
   if (!userId && !guestEmail) {
     errors.push('Vui lòng đăng nhập hoặc cung cấp email');
   }
@@ -138,33 +326,31 @@ app.post('/orders/checkout', async (req, res) => {
   if (!shipping.name || !shipping.phone || !shipping.address || !shipping.city) {
     errors.push('Thiếu thông tin địa chỉ giao hàng');
   }
+  if (pointsToUseCents > 0 && !userId) {
+    errors.push('Vui lòng đăng nhập để sử dụng điểm tích lũy');
+  }
   if (errors.length) return res.status(400).json({ error: 'VALIDATION_ERROR', details: errors });
   
-  // Handle guest checkout: check if email already has an account
   if (!userId && guestEmail) {
     try {
-      // Call auth service to check if user exists
       const authServiceUrl = process.env.AUTH_SERVICE_URL || 'http://auth-service:3001';
       const { data } = await axios.get(`${authServiceUrl}/auth/check-email?email=${encodeURIComponent(guestEmail)}`);
       if (data.exists && data.userId) {
         userId = data.userId;
       }
-      // If user doesn't exist, leave userId as null and use guest_email
     } catch (e) {
-      // Continue as guest if auth service check fails
       console.error('Auth service check failed:', e.message);
     }
   }
   
   const subtotalCents = items.reduce((sum, it) => sum + (it.priceCents * it.quantity), 0);
-  const shippingCents = subtotalCents > 0 ? 3000000 : 0; // 30,000 VND fixed shipping
-  const taxCents = Math.floor(subtotalCents * 0.1); // 10% VAT
+  const shippingCents = subtotalCents > 0 ? 3000000 : 0;
+  const taxCents = Math.floor(subtotalCents * 0.1);
   const totalCents = subtotalCents + shippingCents + taxCents;
   
   let discountCents = 0;
   let appliedCoupon = null;
   if (couponCode) {
-    // Validate 5-character alphanumeric format
     if (!/^[A-Z0-9]{5}$/i.test(couponCode)) {
       return res.status(400).json({ error: 'INVALID_COUPON', details: ['Mã giảm giá phải là chuỗi 5 ký tự chữ và số'] });
     }
@@ -180,7 +366,6 @@ app.post('/orders/checkout', async (req, res) => {
           await conn2.rollback();
           return res.status(400).json({ error: 'INVALID_COUPON', details: ['Mã giảm giá không hợp lệ hoặc đã hết hạn'] });
         }
-        // Check usage limit
         if (c.usage_count >= c.usage_limit) {
           await conn2.rollback();
           return res.status(400).json({ error: 'COUPON_EXHAUSTED', details: ['Mã giảm giá đã hết lượt sử dụng'] });
@@ -188,9 +373,7 @@ app.post('/orders/checkout', async (req, res) => {
         appliedCoupon = c;
         if (c.type === 'percentage') discountCents = Math.floor((subtotalCents * c.value) / 100);
         if (c.type === 'fixed') discountCents = Math.min(totalCents, c.value);
-        if (c.type === 'freeship') discountCents = shippingCents; // Miễn phí vận chuyển
-        
-        // Increment usage count
+        if (c.type === 'freeship') discountCents = shippingCents;
         await conn2.query('UPDATE coupons SET usage_count = usage_count + 1 WHERE id = ?', [c.id]);
         await conn2.commit();
       } catch (e) {
@@ -200,24 +383,33 @@ app.post('/orders/checkout', async (req, res) => {
         conn2.release();
       }
     } catch (e) {
-      // continue without coupon
       console.error('Coupon validation error:', e);
     }
   }
+
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
+    let loyaltyBalance = 0;
+    let loyaltyUsed = 0;
+    if (pointsToUseCents > 0 && userId) {
+      loyaltyBalance = await getLoyaltyBalanceForUpdate(conn, userId);
+    }
+    const maxLoyaltyUse = Math.max(totalCents - discountCents, 0);
+    loyaltyUsed = Math.min(pointsToUseCents, loyaltyBalance, maxLoyaltyUse);
+    const payableCents = Math.max(totalCents - discountCents - loyaltyUsed, 0);
+    const loyaltyEarned = userId ? Math.floor(payableCents * 0.1) : 0;
     const [orderResult] = await conn.query(
       `INSERT INTO orders 
         (user_id, guest_email, status, total_cents,
          shipping_name, shipping_phone, shipping_address, shipping_city, shipping_district, shipping_ward,
          billing_name, billing_phone, billing_address,
-         coupon_code, discount_cents)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
+         coupon_code, discount_cents, loyalty_cents_used, loyalty_cents_earned)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
       [userId || null, (!userId && guestEmail) ? guestEmail : null, 'PENDING', totalCents,
        shipping.name || null, shipping.phone || null, shipping.address || null, shipping.city || null, shipping.district || null, shipping.ward || null,
        billing.name || null, billing.phone || null, billing.address || null,
-       appliedCoupon ? appliedCoupon.code : null, discountCents]
+       appliedCoupon ? appliedCoupon.code : null, discountCents, loyaltyUsed, loyaltyEarned]
     );
     const orderId = orderResult.insertId;
     for (const it of items) {
@@ -226,13 +418,23 @@ app.post('/orders/checkout', async (req, res) => {
         [orderId, it.productId, it.quantity, it.priceCents]
       );
     }
+    await insertStatusHistory(conn, orderId, 'PENDING');
     const { data: intent } = await axios.post(`${PAYMENT_SERVICE_URL}/payment/intents`, {
       orderId,
-      amountCents: Math.max(0, totalCents - discountCents),
+      amountCents: Math.max(0, payableCents),
       currency: 'VND',
     });
     await conn.commit();
-    return res.status(201).json({ orderId, paymentIntentId: intent.id, clientSecret: intent.clientSecret, totalCents, discountCents });
+    return res.status(201).json({
+      orderId,
+      paymentIntentId: intent.id,
+      clientSecret: intent.clientSecret,
+      totalCents,
+      discountCents,
+      loyaltyCentsUsed: loyaltyUsed,
+      loyaltyCentsEarned: loyaltyEarned,
+      payableCents
+    });
   } catch (e) {
     await conn.rollback();
     if (e && e.code === 'ER_BAD_FIELD_ERROR') {
@@ -249,47 +451,47 @@ app.post('/orders/:orderId/pay', async (req, res) => {
   const { intentId } = req.body;
   if (!intentId) return res.status(400).json({ error: 'Missing intentId' });
   try {
-    // Confirm payment with mock service
     await axios.post(`${PAYMENT_SERVICE_URL}/payment/intents/${intentId}/confirm`);
-    await pool.query('UPDATE orders SET status = ? WHERE id = ?', ['PAID', orderId]);
-    return res.json({ ok: true });
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [[order]] = await conn.query('SELECT * FROM orders WHERE id = ?', [orderId]);
+      if (!order) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'Order not found' });
+      }
+      await conn.query('UPDATE orders SET status = ? WHERE id = ?', ['PAID', orderId]);
+      await insertStatusHistory(conn, orderId, 'PAID');
+      await adjustLoyaltyBalance(order.user_id, (order.loyalty_cents_earned || 0) - (order.loyalty_cents_used || 0), conn);
+      await conn.commit();
+    } catch (inner) {
+      await conn.rollback();
+      throw inner;
+    } finally {
+      conn.release();
+    }
+    const orderDetails = await fetchOrderDetail(orderId);
+    await sendOrderConfirmationEmail(orderDetails);
+    return res.json({ ok: true, order: orderDetails });
   } catch (e) {
+    console.error('Payment confirm failed:', e);
     return res.status(500).json({ error: 'Payment confirm failed' });
   }
 });
 
 app.get('/orders/:orderId', async (req, res) => {
   const { orderId } = req.params;
-  const userIdHeader = req.headers['x-user-id'];
-  const userId = userIdHeader ? parseInt(userIdHeader, 10) : null;
-  const [[order]] = await pool.query('SELECT * FROM orders WHERE id = ? AND user_id = ?', [orderId, userId]);
+  const guestEmailParam = (req.query.guestEmail || '').trim().toLowerCase();
+  const userId = headerUserId(req);
+  const [[order]] = await pool.query('SELECT * FROM orders WHERE id = ?', [orderId]);
   if (!order) return res.status(404).json({ error: 'Not found' });
-  const [items] = await pool.query('SELECT * FROM order_items WHERE order_id = ?', [orderId]);
-  // Enrich with product info from catalog service (batched)
-  try {
-    const productIds = [...new Set(items.map((it) => it.product_id))];
-    const details = await Promise.all(
-      productIds.map(async (pid) => {
-        const { data } = await axios.get(`${CATALOG_SERVICE_URL}/catalog/products/${pid}`);
-        return [pid, data];
-      })
-    );
-    const byId = Object.fromEntries(details);
-    const enriched = items.map((it) => ({
-      ...it,
-      product: byId[it.product_id] ? {
-        id: byId[it.product_id].id,
-        name: byId[it.product_id].name,
-        brand: byId[it.product_id].brand,
-        category: byId[it.product_id].category,
-        image_url: byId[it.product_id].images?.[0]?.url || byId[it.product_id].image_url || null,
-      } : null,
-    }));
-    return res.json({ ...order, items: enriched });
-  } catch (e) {
-    // Fallback to raw items if enrichment fails
-    return res.json({ ...order, items });
+  const isOwner = userId && order.user_id === userId;
+  const isGuestAllowed = guestEmailParam && order.guest_email && order.guest_email.toLowerCase() === guestEmailParam;
+  if (!isOwner && !isGuestAllowed) {
+    return res.status(404).json({ error: 'Not found' });
   }
+  const orderDetails = await fetchOrderDetail(orderId);
+  return res.json(orderDetails);
 });
 
 app.get('/orders', async (req, res) => {
@@ -297,7 +499,39 @@ app.get('/orders', async (req, res) => {
   const userId = userIdHeader ? parseInt(userIdHeader, 10) : null;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   const [orders] = await pool.query('SELECT * FROM orders WHERE user_id = ? ORDER BY id DESC LIMIT 50', [userId]);
-  return res.json(orders);
+  
+  // Enrich each order with items
+  const enrichedOrders = await Promise.all(orders.map(async (order) => {
+    const [items] = await pool.query('SELECT * FROM order_items WHERE order_id = ?', [order.id]);
+    // Enrich items with product info from catalog service
+    const enrichedItems = await Promise.all(items.map(async (item) => {
+      try {
+        const { data } = await axios.get(`${CATALOG_SERVICE_URL}/catalog/products/${item.product_id}`);
+        return {
+          ...item,
+          product: {
+            id: data.id,
+            name: data.name,
+            brand: data.brand,
+            category: data.category,
+            image_url: data.images?.[0]?.url || data.image_url || null
+          }
+        };
+      } catch (e) {
+        return { ...item, product: null };
+      }
+    }));
+    return { ...order, items: enrichedItems };
+  }));
+  
+  return res.json(enrichedOrders);
+});
+
+app.get('/orders/loyalty', async (req, res) => {
+  const userId = headerUserId(req);
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  const balanceCents = await getLoyaltyBalance(userId);
+  return res.json({ balanceCents });
 });
 
 // Validate coupon code
@@ -422,6 +656,7 @@ app.patch('/admin/orders/:orderId/status', async (req, res) => {
   const allowed = ['PENDING', 'PAID', 'CANCELLED', 'SHIPPING', 'DELIVERED'];
   if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid status' });
   await pool.query('UPDATE orders SET status = ? WHERE id = ?', [status, orderId]);
+  await insertStatusHistory(pool, orderId, status, req.body.note || null);
   return res.json({ ok: true });
 });
 

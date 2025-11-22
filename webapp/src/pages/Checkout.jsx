@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import Button from '../components/ui/Button'
 import { Card, CardBody } from '../components/ui/Card'
 import { fetchCart } from '../services/cart'
-import { checkoutOrder, payForOrder, validateCoupon } from '../services/orders'
+import { checkoutOrder, payForOrder, validateCoupon, getLoyaltyPoints } from '../services/orders'
 import { motion } from 'framer-motion'
 import { useToast } from '../ui/Toast'
 
@@ -25,6 +25,10 @@ export default function Checkout() {
   const [saveAsDefault, setSaveAsDefault] = useState(false)
   const [savedAddresses, setSavedAddresses] = useState([])
   const [showAddressSelect, setShowAddressSelect] = useState(false)
+  const [loyaltyBalance, setLoyaltyBalance] = useState(0)
+  const [pointsToUseVND, setPointsToUseVND] = useState(0)
+  const [loyaltyLoading, setLoyaltyLoading] = useState(false)
+  const [loyaltyError, setLoyaltyError] = useState('')
   
   useEffect(() => { 
     fetchCart(api).then(setCart) 
@@ -56,6 +60,27 @@ export default function Checkout() {
       }).catch(() => {})
     }
   }, [api, token])
+
+  useEffect(() => {
+    if (!token) {
+      setLoyaltyBalance(0)
+      setPointsToUseVND(0)
+      return
+    }
+    setLoyaltyLoading(true)
+    setLoyaltyError('')
+    getLoyaltyPoints(api)
+      .then((data) => setLoyaltyBalance(Number(data.balanceCents || 0)))
+      .catch(() => setLoyaltyError('Không thể tải điểm tích lũy'))
+      .finally(() => setLoyaltyLoading(false))
+  }, [api, token])
+
+  useEffect(() => {
+    const maxVND = Math.floor(loyaltyBalance / 100)
+    if (pointsToUseVND > maxVND) {
+      setPointsToUseVND(maxVND)
+    }
+  }, [loyaltyBalance])
   
   const subtotal = cart.items.reduce((s, it) => s + it.price_cents_snapshot * it.quantity, 0)
   const shippingFee = subtotal > 0 ? 3000000 : 0
@@ -69,36 +94,35 @@ export default function Checkout() {
     if (coupon.type === 'freeship') return shippingFee
     return 0
   })()
+
+  const rawPointsInput = Math.max(0, Math.floor(pointsToUseVND || 0))
+  const desiredPointsCents = rawPointsInput * 100
+  const maxLoyaltyApplicable = Math.max(total - discount, 0)
+  const loyaltyDiscount = Math.min(desiredPointsCents, loyaltyBalance, maxLoyaltyApplicable)
+  const finalTotal = Math.max(total - discount - loyaltyDiscount, 0)
   
   async function pay() {
     try {
       const items = cart.items.map(it => ({ productId: it.product_id, quantity: it.quantity, priceCents: it.price_cents_snapshot }))
       setError('')
       
-      // For guest checkout, include email
-      const checkoutData = { 
-        items, 
-        shipping, 
-        billing
-      }
-      
-      // Only send coupon code if it's been validated
+      const checkoutData = { items, shipping, billing }
       if (coupon && coupon.code) {
         checkoutData.couponCode = coupon.code
       }
-      
       if (!token && guestEmail) {
         checkoutData.guestEmail = guestEmail
       }
+      checkoutData.pointsToUseCents = loyaltyDiscount
       
-      const data = await checkoutOrder(api, checkoutData)
-      if (data.qrUrl) {
-        window.open(data.qrUrl, '_blank')
+      const checkoutResult = await checkoutOrder(api, checkoutData)
+      if (checkoutResult.qrUrl) {
+        window.open(checkoutResult.qrUrl, '_blank')
       }
-      // Với demo QR: người dùng chuyển khoản xong, nhấn nút xác nhận để gọi confirm
-      await payForOrder(api, { orderId: data.orderId, intentId: data.paymentIntentId })
       
-      // Save address as default if user opted in
+      const payResult = await payForOrder(api, { orderId: checkoutResult.orderId, intentId: checkoutResult.paymentIntentId })
+      const orderData = payResult.order
+      
       if (token && saveAsDefault) {
         try {
           await api.patch('/auth/me', {
@@ -114,13 +138,12 @@ export default function Checkout() {
       }
       
       toast.show('✓ Thanh toán thành công', { type: 'success' })
-      
-      if (!token) {
+      if (!token && guestEmail) {
         toast.show('Tài khoản đã được tạo với email: ' + guestEmail, { type: 'info' })
-        setTimeout(() => navigate('/login'), 2000)
-      } else {
-        navigate('/orders')
       }
+
+      const guestQuery = (!token && guestEmail) ? `?guestEmail=${encodeURIComponent(guestEmail)}` : ''
+      navigate(`/orders/success/${orderData.id || orderData.order_id}${guestQuery}`, { state: { orderPreview: orderData } })
     } catch (e) {
       const msg = e?.response?.data?.details?.join(', ') || e?.response?.data?.error || 'Có lỗi khi thanh toán, vui lòng thử lại'
       setError(String(msg))
@@ -161,6 +184,12 @@ export default function Checkout() {
     setCouponCode('')
     setCouponError('')
     toast.show('Đã xóa mã giảm giá', { type: 'info' })
+  }
+
+  const handlePointsChange = (value) => {
+    const next = Number(value)
+    if (!Number.isFinite(next)) return
+    setPointsToUseVND(Math.max(0, Math.floor(next)))
   }
   
   return (
@@ -315,10 +344,16 @@ export default function Checkout() {
                     <span>-{(discount/100).toLocaleString()} ₫</span>
                   </div>
                 )}
+                {loyaltyDiscount > 0 && (
+                  <div className="flex justify-between text-amber-600">
+                    <span>Giảm điểm tích lũy</span>
+                    <span>-{(loyaltyDiscount/100).toLocaleString()} ₫</span>
+                  </div>
+                )}
                 <div className="pt-2 border-t border-slate-200 dark:border-slate-700"></div>
                 <div className="flex justify-between font-semibold text-base text-slate-900 dark:text-slate-100">
                   <span>Tổng cộng</span>
-                  <span className="text-primary">{((total-discount)/100).toLocaleString()} ₫</span>
+                  <span className="text-primary">{(finalTotal/100).toLocaleString()} ₫</span>
                 </div>
               </div>
               
@@ -385,6 +420,42 @@ export default function Checkout() {
                         </svg>
                       </button>
                     </div>
+                  </div>
+                )}
+                {token && (
+                  <div className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-3 dark:border-slate-600 dark:bg-slate-800">
+                    <div className="flex items-center justify-between text-sm text-slate-600">
+                      <span>Điểm tích lũy</span>
+                      <span>
+                        {(loyaltyBalance / 100).toLocaleString()} ₫
+                        {` (~${Math.floor(loyaltyBalance / 100000)} điểm)`}
+                      </span>
+                    </div>
+                    <div className="mt-3 flex gap-2">
+                      <input
+                        type="number"
+                        min={0}
+                        value={pointsToUseVND}
+                        onChange={(e) => handlePointsChange(e.target.value)}
+                        className="h-11 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900"
+                        placeholder="Nhập số tiền muốn dùng"
+                        disabled={loyaltyLoading}
+                      />
+                      <Button
+                        onClick={() => setPointsToUseVND(Math.floor(loyaltyBalance / 100))}
+                        variant="outline"
+                        disabled={!loyaltyBalance || loyaltyLoading}
+                      >
+                        Dùng tối đa
+                      </Button>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                      <span>1 điểm = 1.000 ₫ • Có thể dùng ngay</span>
+                      {loyaltyLoading && <span>Đang tải...</span>}
+                    </div>
+                    {loyaltyError && (
+                      <div className="mt-2 text-xs text-red-600 dark:text-red-400">{loyaltyError}</div>
+                    )}
                   </div>
                 )}
               </div>

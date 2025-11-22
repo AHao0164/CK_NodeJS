@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import ProductCard from '../components/ProductCard'
 import { listProducts, listCategories, listProductsByCategory } from '../services/catalog'
+import { Link } from 'react-router-dom'
 import { addItemToCart } from '../services/cart'
 import Banner from '../components/Banner'
 import FiltersBar from '../components/FiltersBar'
@@ -188,9 +189,9 @@ export default function Home() {
         <div className="mt-6 space-y-10">
           {featuredCategories.map(c => (
             <div key={`row-${c.id}`}>
-              <div className="mb-3 flex items-end justify-between">
+                <div className="mb-3 flex items-end justify-between">
                 <h3 className="text-lg font-semibold">{c.name}</h3>
-                <button className="text-sm text-blue-600 hover:underline" onClick={() => setCategoryFilter(c.name)}>Xem tất cả</button>
+                <Link className="text-sm text-blue-600 hover:underline" to={`/products?category=${encodeURIComponent(c.name)}`}>Xem tất cả</Link>
               </div>
               <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
                 {(categoryProducts[c.id] || []).map(p => (

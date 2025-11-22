@@ -111,6 +111,9 @@ app.get('/catalog/products', async (req, res) => {
   // Filtering parameters
   const brandIds = req.query.brandIds ? String(req.query.brandIds).split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id)) : [];
   const categoryIds = req.query.categoryIds ? String(req.query.categoryIds).split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id)) : [];
+  // Accept brand and category names as well for convenience from frontend
+  const brandName = req.query.brand ? String(req.query.brand).trim() : null;
+  const categoryName = req.query.category ? String(req.query.category).trim() : null;
   const minPrice = req.query.minPrice ? parseInt(req.query.minPrice, 10) : null;
   const maxPrice = req.query.maxPrice ? parseInt(req.query.maxPrice, 10) : null;
   const minRating = req.query.minRating ? parseFloat(req.query.minRating) : null;
@@ -141,6 +144,18 @@ app.get('/catalog/products', async (req, res) => {
   if (categoryIds.length > 0) {
     whereClauses.push(`p.category_id IN (${categoryIds.map(() => '?').join(',')})`);
     params.push(...categoryIds);
+  }
+
+  // If brand name provided, filter by brand name (joins already in query)
+  if (brandName) {
+    whereClauses.push('b.name = ?');
+    params.push(brandName);
+  }
+
+  // If category name provided, filter by category name
+  if (categoryName) {
+    whereClauses.push('c.name = ?');
+    params.push(categoryName);
   }
   
   if (minPrice !== null) {
