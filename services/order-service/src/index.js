@@ -13,6 +13,7 @@ app.use(morgan('dev'));
 const PORT = process.env.PORT || 3004;
 const PAYMENT_SERVICE_URL = process.env.PAYMENT_SERVICE_URL || 'http://localhost:3005';
 const CATALOG_SERVICE_URL = process.env.CATALOG_SERVICE_URL || 'http://localhost:3002';
+const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://localhost:3001';
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
@@ -556,10 +557,28 @@ app.get('/orders/coupons/:code', async (req, res) => {
   }
 });
 
-// Admin: coupons CRUD
+// Admin: coupons CRUD with orders where applied
 app.get('/admin/coupons', async (req, res) => {
-  const [rows] = await pool.query('SELECT id, code, type, value, active, usage_limit, usage_count, start_date, end_date FROM coupons ORDER BY id DESC LIMIT 500');
-  return res.json(rows);
+  try {
+    const [rows] = await pool.query('SELECT id, code, type, value, active, usage_limit, usage_count, start_date, end_date, created_at FROM coupons ORDER BY id DESC LIMIT 500');
+    
+    // Get orders for each coupon
+    const couponsWithOrders = await Promise.all(rows.map(async (coupon) => {
+      const [orders] = await pool.query(
+        'SELECT id, total_cents, discount_cents, created_at, status FROM orders WHERE coupon_code = ? ORDER BY created_at DESC LIMIT 50',
+        [coupon.code]
+      );
+      return {
+        ...coupon,
+        orders: orders
+      };
+    }));
+    
+    return res.json(couponsWithOrders);
+  } catch (e) {
+    console.error('Get coupons error:', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
 });
 
 app.post('/admin/coupons', async (req, res) => {
@@ -634,19 +653,301 @@ function requireAdmin(req, res, next) {
 
 app.use(requireAdmin);
 
-// Admin: list recent orders
-app.get('/admin/orders', async (req, res) => {
-  const [orders] = await pool.query('SELECT * FROM orders ORDER BY id DESC LIMIT 200');
-  return res.json(orders);
+// Admin: Dashboard statistics - Simple
+app.get('/admin/dashboard/simple', async (req, res) => {
+  try {
+    // Total users - get from auth-service API
+    let totalUsers = 0;
+    let newUsersCount = 0;
+    try {
+      // Forward admin headers to auth-service
+      const { data: userStats } = await axios.get(`${AUTH_SERVICE_URL}/admin/dashboard/users`, {
+        headers: {
+          'x-user-id': req.headers['x-user-id'],
+          'x-user-role': req.headers['x-user-role'],
+        }
+      });
+      totalUsers = userStats.totalUsers || 0;
+      newUsersCount = userStats.newUsers || 0;
+    } catch (e) {
+      console.error('Failed to get user stats from auth-service:', e.message);
+      // Fallback: count from orders
+      const [userCount] = await pool.query('SELECT COUNT(DISTINCT user_id) as count FROM orders WHERE user_id IS NOT NULL');
+      totalUsers = userCount[0]?.count || 0;
+      const [newUsers] = await pool.query(`
+        SELECT COUNT(DISTINCT user_id) as count 
+        FROM orders 
+        WHERE user_id IS NOT NULL 
+        AND MONTH(created_at) = MONTH(CURRENT_DATE()) 
+        AND YEAR(created_at) = YEAR(CURRENT_DATE())
+      `);
+      newUsersCount = newUsers[0]?.count || 0;
+    }
+    
+    // Total orders
+    const [orderCount] = await pool.query('SELECT COUNT(*) as count FROM orders');
+    const totalOrders = orderCount[0]?.count || 0;
+    
+    // Total revenue (from PAID orders)
+    const [revenue] = await pool.query(`
+      SELECT COALESCE(SUM(total_cents - discount_cents - loyalty_cents_used), 0) as revenue 
+      FROM orders 
+      WHERE status = 'PAID'
+    `);
+    const totalRevenue = revenue[0]?.revenue || 0;
+    
+    // Best selling products
+    const [topProducts] = await pool.query(`
+      SELECT 
+        oi.product_id,
+        SUM(oi.quantity) as total_quantity,
+        SUM(oi.quantity * oi.price_cents) as total_revenue
+      FROM order_items oi
+      INNER JOIN orders o ON o.id = oi.order_id
+      WHERE o.status = 'PAID'
+      GROUP BY oi.product_id
+      ORDER BY total_quantity DESC
+      LIMIT 10
+    `);
+    
+    // Get product names from catalog service
+    const enrichedProducts = await Promise.all(topProducts.map(async (p) => {
+      try {
+        const { data } = await axios.get(`${CATALOG_SERVICE_URL}/catalog/products/${p.product_id}`);
+        return {
+          product_id: p.product_id,
+          name: data.name || `Product #${p.product_id}`,
+          quantity: p.total_quantity,
+          revenue: p.total_revenue
+        };
+      } catch (e) {
+        return {
+          product_id: p.product_id,
+          name: `Product #${p.product_id}`,
+          quantity: p.total_quantity,
+          revenue: p.total_revenue
+        };
+      }
+    }));
+    
+    return res.json({
+      totalUsers,
+      newUsers: newUsersCount,
+      totalOrders,
+      totalRevenue,
+      bestSellingProducts: enrichedProducts
+    });
+  } catch (e) {
+    console.error('Dashboard simple stats error:', e);
+    return res.status(500).json({ error: 'Server error', details: e.message, stack: e.stack });
+  }
 });
 
-// Admin: get order with items
+// Admin: Dashboard statistics - Advanced
+app.get('/admin/dashboard/advanced', async (req, res) => {
+  try {
+    const { interval = 'year', startDate, endDate } = req.query;
+    
+    let dateFilter = '';
+    let groupBy = '';
+    let dateFormat = '';
+    
+    if (startDate && endDate) {
+      dateFilter = `AND DATE(created_at) BETWEEN ? AND ?`;
+      groupBy = 'DATE(created_at)';
+      dateFormat = 'DATE(created_at)';
+    } else {
+      switch (interval) {
+        case 'year':
+          groupBy = 'YEAR(created_at)';
+          dateFormat = 'YEAR(created_at)';
+          break;
+        case 'quarter':
+          groupBy = 'YEAR(created_at), QUARTER(created_at)';
+          dateFormat = "CONCAT(YEAR(created_at), '-Q', QUARTER(created_at))";
+          break;
+        case 'month':
+          groupBy = 'YEAR(created_at), MONTH(created_at)';
+          dateFormat = "CONCAT(YEAR(created_at), '-', LPAD(MONTH(created_at), 2, '0'))";
+          break;
+        case 'week':
+          groupBy = 'YEAR(created_at), WEEK(created_at)';
+          dateFormat = "CONCAT(YEAR(created_at), '-W', LPAD(WEEK(created_at), 2, '0'))";
+          break;
+        default:
+          groupBy = 'YEAR(created_at)';
+          dateFormat = 'YEAR(created_at)';
+      }
+    }
+    
+    const params = [];
+    if (dateFilter) {
+      params.push(startDate, endDate);
+    }
+    
+    // Orders, revenue, profit by time period
+    const [stats] = await pool.query(`
+      SELECT 
+        ${dateFormat} as period,
+        COUNT(*) as orders_count,
+        COALESCE(SUM(CASE WHEN status = 'PAID' THEN total_cents - discount_cents - loyalty_cents_used ELSE 0 END), 0) as revenue,
+        COALESCE(SUM(CASE WHEN status = 'PAID' THEN (total_cents - discount_cents - loyalty_cents_used) * 0.3 ELSE 0 END), 0) as profit
+      FROM orders
+      WHERE 1=1 ${dateFilter}
+      GROUP BY ${groupBy}
+      ORDER BY period ASC
+    `, params);
+    
+    // Products sold by period
+    let orderDateFilter = dateFilter ? dateFilter.replace('created_at', 'o.created_at') : '';
+    let orderDateFormat = dateFormat.replace(/created_at/g, 'o.created_at');
+    let orderGroupBy = groupBy.replace(/created_at/g, 'o.created_at');
+    
+    const [productsStats] = await pool.query(`
+      SELECT 
+        ${orderDateFormat} as period,
+        COUNT(DISTINCT oi.product_id) as unique_products,
+        SUM(oi.quantity) as total_products_sold
+      FROM order_items oi
+      INNER JOIN orders o ON o.id = oi.order_id
+      WHERE o.status = 'PAID' ${orderDateFilter}
+      GROUP BY ${orderGroupBy}
+      ORDER BY period ASC
+    `, params);
+    
+    // Product types/categories sold by period
+    const [categoryStats] = await pool.query(`
+      SELECT 
+        ${orderDateFormat} as period,
+        p.category_id,
+        COUNT(DISTINCT oi.product_id) as products_count,
+        SUM(oi.quantity) as quantity_sold
+      FROM order_items oi
+      INNER JOIN orders o ON o.id = oi.order_id
+      LEFT JOIN catalog_db.products p ON p.id = oi.product_id
+      WHERE o.status = 'PAID' ${orderDateFilter}
+      GROUP BY ${orderGroupBy}, p.category_id
+      ORDER BY period ASC, quantity_sold DESC
+    `, params);
+    
+    return res.json({
+      revenueProfit: stats || [],
+      productsSold: productsStats || [],
+      categoriesSold: categoryStats || []
+    });
+  } catch (e) {
+    console.error('Dashboard advanced stats error:', e);
+    return res.status(500).json({ error: 'Server error', details: e.message });
+  }
+});
+
+// Admin: list recent orders with pagination and filters
+app.get('/admin/orders', async (req, res) => {
+  try {
+    const { page = 1, limit = 20, startDate, endDate, timeRange } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+    
+    let dateFilter = '';
+    const params = [];
+    
+    if (timeRange) {
+      const now = new Date();
+      let start = new Date();
+      
+      switch (timeRange) {
+        case 'today':
+          start.setHours(0, 0, 0, 0);
+          dateFilter = 'AND DATE(created_at) = CURDATE()';
+          break;
+        case 'yesterday':
+          start.setDate(start.getDate() - 1);
+          start.setHours(0, 0, 0, 0);
+          const yesterdayEnd = new Date(start);
+          yesterdayEnd.setHours(23, 59, 59, 999);
+          dateFilter = 'AND DATE(created_at) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)';
+          break;
+        case 'thisWeek':
+          start.setDate(start.getDate() - start.getDay());
+          start.setHours(0, 0, 0, 0);
+          dateFilter = 'AND YEARWEEK(created_at) = YEARWEEK(CURRENT_DATE)';
+          break;
+        case 'thisMonth':
+          start.setDate(1);
+          start.setHours(0, 0, 0, 0);
+          dateFilter = 'AND MONTH(created_at) = MONTH(CURRENT_DATE) AND YEAR(created_at) = YEAR(CURRENT_DATE)';
+          break;
+      }
+    } else if (startDate && endDate) {
+      dateFilter = 'AND DATE(created_at) BETWEEN ? AND ?';
+      params.push(startDate, endDate);
+    }
+    
+    const [orders] = await pool.query(
+      `SELECT * FROM orders WHERE 1=1 ${dateFilter} ORDER BY id DESC LIMIT ? OFFSET ?`,
+      [...params, parseInt(limit), offset]
+    );
+    
+    const [countResult] = await pool.query(
+      `SELECT COUNT(*) as total FROM orders WHERE 1=1 ${dateFilter}`,
+      params
+    );
+    const total = countResult[0]?.total || 0;
+    
+    return res.json({
+      items: orders,
+      total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      totalPages: Math.ceil(total / parseInt(limit))
+    });
+  } catch (e) {
+    console.error('Admin orders list error:', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Admin: get order with items and user info
 app.get('/admin/orders/:orderId', async (req, res) => {
+  try {
   const { orderId } = req.params;
   const [[order]] = await pool.query('SELECT * FROM orders WHERE id = ?', [orderId]);
   if (!order) return res.status(404).json({ error: 'Not found' });
-  const [items] = await pool.query('SELECT * FROM order_items WHERE order_id = ?', [orderId]);
-  return res.json({ ...order, items });
+    
+    // Get user info if exists
+    let userInfo = null;
+    if (order.user_id) {
+      try {
+        const [[user]] = await pool.query('SELECT id, email, full_name FROM auth_db.users WHERE id = ?', [order.user_id]);
+        if (user) userInfo = user;
+      } catch (e) {
+        console.error('Failed to fetch user info:', e);
+      }
+    }
+    
+    // Get order items with product info
+    const [items] = await pool.query(`
+      SELECT oi.*, p.name, p.brand, p.category, p.image_url
+      FROM order_items oi
+      LEFT JOIN catalog_db.products p ON p.id = oi.product_id
+      WHERE oi.order_id = ?
+    `, [orderId]);
+    
+    // Get status history
+    const [statusHistory] = await pool.query(
+      'SELECT status, note, created_at FROM order_status_history WHERE order_id = ? ORDER BY created_at DESC',
+      [orderId]
+    );
+    
+    return res.json({ 
+      ...order, 
+      items, 
+      status_history: statusHistory,
+      user: userInfo
+    });
+  } catch (e) {
+    console.error('Get order detail error:', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
 });
 
 // Admin: update status

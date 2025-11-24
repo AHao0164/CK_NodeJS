@@ -173,6 +173,13 @@ app.use('/admin/catalog', (req, res) => proxy(req, res, services.catalog));
 app.use('/admin/orders', (req, res) => proxy(req, res, services.order));
 app.use('/admin/coupons', (req, res) => proxy(req, res, services.order));
 app.use('/admin/users', (req, res) => proxy(req, res, services.auth));
+app.use('/admin/dashboard', (req, res) => {
+  // Route to appropriate service based on path
+  if (req.path.includes('/users')) {
+    return proxy(req, res, services.auth);
+  }
+  return proxy(req, res, services.order);
+});
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 

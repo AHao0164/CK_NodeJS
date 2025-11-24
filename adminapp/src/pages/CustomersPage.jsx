@@ -13,14 +13,25 @@ import {
   TextField,
   InputAdornment,
   Avatar,
+  IconButton,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
+  MenuItem,
+  Select,
 } from '@mui/material';
-import { Search, Person } from '@mui/icons-material';
+import { Search, Person, Edit, Block, CheckCircle } from '@mui/icons-material';
 import { useAuth } from '../state/AuthContext.jsx';
 
 export default function CustomersPage() {
   const { api } = useAuth();
   const [customers, setCustomers] = useState([]);
   const [search, setSearch] = useState('');
+  const [editOpen, setEditOpen] = useState(false);
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [form, setForm] = useState({});
 
   useEffect(() => {
     loadCustomers();
@@ -35,10 +46,43 @@ export default function CustomersPage() {
     }
   };
 
+  const handleEdit = (customer) => {
+    setSelectedCustomer(customer);
+    setForm({
+      full_name: customer.full_name || '',
+      email: customer.email || '',
+      banned: customer.banned || 0,
+    });
+    setEditOpen(true);
+  };
+
+  const handleSave = async () => {
+    try {
+      await api.patch(`/admin/users/${selectedCustomer.id}`, form);
+      await loadCustomers();
+      setEditOpen(false);
+      setSelectedCustomer(null);
+      setForm({});
+    } catch (error) {
+      console.error('Failed to update customer:', error);
+      alert('Cập nhật thất bại: ' + (error.response?.data?.error || error.message));
+    }
+  };
+
+  const handleBan = async (customer, ban) => {
+    try {
+      await api.patch(`/admin/users/${customer.id}`, { banned: ban ? 1 : 0 });
+      await loadCustomers();
+    } catch (error) {
+      console.error('Failed to ban/unban customer:', error);
+      alert('Thao tác thất bại');
+    }
+  };
+
   const filteredCustomers = customers.filter(
     (c) =>
       c.email.toLowerCase().includes(search.toLowerCase()) ||
-      c.full_name.toLowerCase().includes(search.toLowerCase())
+      c.full_name?.toLowerCase().includes(search.toLowerCase())
   );
 
   const formatDate = (dateString) => {
@@ -81,13 +125,15 @@ export default function CustomersPage() {
               <TableCell>Khách hàng</TableCell>
               <TableCell>Email</TableCell>
               <TableCell>Vai trò</TableCell>
+              <TableCell>Trạng thái</TableCell>
               <TableCell>Ngày đăng ký</TableCell>
+              <TableCell align="right">Thao tác</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {filteredCustomers.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4} align="center">
+                <TableCell colSpan={6} align="center">
                   <Typography color="text.secondary" variant="body2" sx={{ py: 4 }}>
                     Không tìm thấy khách hàng nào
                   </Typography>
@@ -114,15 +160,85 @@ export default function CustomersPage() {
                       size="small"
                     />
                   </TableCell>
+                  <TableCell>
+                    <Chip
+                      label={customer.banned ? 'Đã khóa' : 'Hoạt động'}
+                      color={customer.banned ? 'error' : 'success'}
+                      size="small"
+                    />
+                  </TableCell>
                   <TableCell>{formatDate(customer.created_at)}</TableCell>
+                  <TableCell align="right">
+                    <Stack direction="row" spacing={1} justifyContent="flex-end">
+                      <IconButton
+                        size="small"
+                        onClick={() => handleEdit(customer)}
+                        color="primary"
+                      >
+                        <Edit fontSize="small" />
+                      </IconButton>
+                      {customer.banned ? (
+                        <IconButton
+                          size="small"
+                          onClick={() => handleBan(customer, false)}
+                          color="success"
+                        >
+                          <CheckCircle fontSize="small" />
+                        </IconButton>
+                      ) : (
+                        <IconButton
+                          size="small"
+                          onClick={() => handleBan(customer, true)}
+                          color="error"
+                        >
+                          <Block fontSize="small" />
+                        </IconButton>
+                      )}
+                    </Stack>
+                  </TableCell>
                 </TableRow>
               ))
             )}
           </TableBody>
         </Table>
       </Paper>
+
+      {/* Edit Dialog */}
+      <Dialog open={editOpen} onClose={() => setEditOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Sửa thông tin khách hàng</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <TextField
+              label="Tên đầy đủ"
+              value={form.full_name || ''}
+              onChange={(e) => setForm({ ...form, full_name: e.target.value })}
+              fullWidth
+            />
+            <TextField
+              label="Email"
+              value={form.email || ''}
+              onChange={(e) => setForm({ ...form, email: e.target.value })}
+              fullWidth
+              type="email"
+            />
+            <Select
+              label="Trạng thái"
+              value={form.banned || 0}
+              onChange={(e) => setForm({ ...form, banned: e.target.value })}
+              fullWidth
+            >
+              <MenuItem value={0}>Hoạt động</MenuItem>
+              <MenuItem value={1}>Đã khóa</MenuItem>
+            </Select>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditOpen(false)}>Hủy</Button>
+          <Button variant="contained" onClick={handleSave}>
+            Lưu
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
-
-

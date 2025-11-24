@@ -18,8 +18,14 @@ import {
   Typography,
   Alert,
   LinearProgress,
+  Collapse,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
 } from '@mui/material';
-import { Add, Edit, Delete, LocalOffer } from '@mui/icons-material';
+import { Add, Edit, Delete, LocalOffer, ExpandMore, ExpandLess } from '@mui/icons-material';
 import { useAuth } from '../state/AuthContext';
 
 export default function PromotionsPage() {
@@ -30,6 +36,7 @@ export default function PromotionsPage() {
   const [form, setForm] = useState({});
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [expandedCoupon, setExpandedCoupon] = useState(null);
 
   useEffect(() => {
     loadPromotions();
@@ -226,7 +233,7 @@ export default function PromotionsPage() {
                   </Typography>
 
                   <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-                    📊 Đã dùng: {promo.usage_count}/{promo.usage_limit} lượt
+                    📊 Đã dùng: {promo.usage_count || 0}/{promo.usage_limit || 10} lượt
                   </Typography>
 
                   {promo.start_date && promo.end_date && (
@@ -234,7 +241,79 @@ export default function PromotionsPage() {
                       📅 {new Date(promo.start_date).toLocaleDateString('vi-VN')} - {new Date(promo.end_date).toLocaleDateString('vi-VN')}
                     </Typography>
                   )}
+                  
+                  {promo.created_at && (
+                    <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
+                      🕐 Tạo: {new Date(promo.created_at).toLocaleDateString('vi-VN')}
+                    </Typography>
+                  )}
+                  
+                  <Button
+                    size="small"
+                    onClick={() => setExpandedCoupon(expandedCoupon === promo.id ? null : promo.id)}
+                    sx={{ mt: 1 }}
+                    startIcon={expandedCoupon === promo.id ? <ExpandLess /> : <ExpandMore />}
+                  >
+                    {expandedCoupon === promo.id ? 'Ẩn' : 'Xem'} đơn hàng ({promo.orders?.length || 0})
+                  </Button>
                 </Box>
+                
+                <Collapse in={expandedCoupon === promo.id}>
+                  <Box sx={{ mt: 2 }}>
+                    {promo.orders && promo.orders.length > 0 ? (
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>Mã đơn</TableCell>
+                            <TableCell>Ngày</TableCell>
+                            <TableCell align="right">Tổng tiền</TableCell>
+                            <TableCell align="right">Giảm giá</TableCell>
+                            <TableCell>Trạng thái</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {promo.orders.map((order) => (
+                            <TableRow key={order.id}>
+                              <TableCell>#{order.id}</TableCell>
+                              <TableCell>
+                                {new Date(order.created_at).toLocaleDateString('vi-VN')}
+                              </TableCell>
+                              <TableCell align="right">
+                                {new Intl.NumberFormat('vi-VN', {
+                                  style: 'currency',
+                                  currency: 'VND',
+                                }).format(order.total_cents)}
+                              </TableCell>
+                              <TableCell align="right">
+                                {new Intl.NumberFormat('vi-VN', {
+                                  style: 'currency',
+                                  currency: 'VND',
+                                }).format(order.discount_cents || 0)}
+                              </TableCell>
+                              <TableCell>
+                                <Chip
+                                  label={order.status}
+                                  size="small"
+                                  color={
+                                    order.status === 'PAID'
+                                      ? 'success'
+                                      : order.status === 'CANCELLED'
+                                      ? 'error'
+                                      : 'default'
+                                  }
+                                />
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 2 }}>
+                        Chưa có đơn hàng nào sử dụng mã này
+                      </Typography>
+                    )}
+                  </Box>
+                </Collapse>
               </CardContent>
             </Card>
           </Grid>
