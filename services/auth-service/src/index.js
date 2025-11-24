@@ -410,6 +410,7 @@ async function initializeService() {
   try {
     await waitForDatabase();
     await ensureInitialAdmin();
+    await ensureBannedColumn();
   } catch (err) {
     console.error('Failed to initialize service:', err);
     process.exit(1);
@@ -751,10 +752,124 @@ function requireAdmin(req, res, next) {
 }
 app.use(requireAdmin);
 
+// Ensure banned column exists
+async function ensureBannedColumn() {
+  const conn = await pool.getConnection();
+  try {
+    // Check if column exists
+    const [[row]] = await conn.query(
+      `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS 
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'banned'`
+    );
+    if (!row || row.cnt === 0) {
+      await conn.query('ALTER TABLE users ADD COLUMN banned TINYINT(1) NOT NULL DEFAULT 0');
+    }
+  } catch (e) {
+    console.error('ensureBannedColumn error:', e);
+    // Column might already exist or other error
+  } finally {
+    conn.release();
+  }
+}
+
 app.get('/admin/users', async (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
-  const [rows] = await pool.query('SELECT id, email, full_name, role, created_at FROM users ORDER BY id DESC LIMIT ?', [limit]);
-  return res.json(rows);
+  try {
+    const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
+    // Try to select banned column, if it doesn't exist, use COALESCE to default to 0
+    try {
+      const [rows] = await pool.query('SELECT id, email, full_name, role, COALESCE(banned, 0) as banned, created_at FROM users ORDER BY id DESC LIMIT ?', [limit]);
+      return res.json(rows);
+    } catch (e) {
+      // If banned column doesn't exist, select without it
+      if (e.code === 'ER_BAD_FIELD_ERROR') {
+        await ensureBannedColumn();
+        const [rows] = await pool.query('SELECT id, email, full_name, role, COALESCE(banned, 0) as banned, created_at FROM users ORDER BY id DESC LIMIT ?', [limit]);
+        return res.json(rows);
+      }
+      throw e;
+    }
+  } catch (e) {
+    console.error('Get users error:', e);
+    return res.status(500).json({ error: 'Server error', details: e.message });
+  }
+});
+
+// Admin: Update user (ban/unban, update info)
+app.patch('/admin/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { banned, full_name, email } = req.body;
+    
+    const updates = [];
+    const params = [];
+    
+    if (banned !== undefined) {
+      // Ensure column exists before updating
+      try {
+        await ensureBannedColumn();
+      } catch (e) {
+        console.error('Failed to ensure banned column:', e);
+      }
+      updates.push('banned = ?');
+      params.push(banned ? 1 : 0);
+    }
+    if (full_name) {
+      updates.push('full_name = ?');
+      params.push(full_name);
+    }
+    if (email) {
+      updates.push('email = ?');
+      params.push(email);
+    }
+    
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+    
+    params.push(id);
+    await pool.query(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('Update user error:', e);
+    return res.status(500).json({ error: 'Server error', details: e.message });
+  }
+});
+
+// Admin: Get user statistics for dashboard
+app.get('/admin/dashboard/users', async (req, res) => {
+  try {
+    const [totalUsers] = await pool.query('SELECT COUNT(*) as count FROM users');
+    const [newUsers] = await pool.query(`
+      SELECT COUNT(*) as count 
+      FROM users 
+      WHERE MONTH(created_at) = MONTH(CURRENT_DATE()) 
+      AND YEAR(created_at) = YEAR(CURRENT_DATE())
+    `);
+    
+    // Try to get banned users count, default to 0 if column doesn't exist
+    let bannedUsersCount = 0;
+    try {
+      const [bannedUsers] = await pool.query('SELECT COUNT(*) as count FROM users WHERE banned = 1');
+      bannedUsersCount = bannedUsers[0]?.count || 0;
+    } catch (e) {
+      if (e.code === 'ER_BAD_FIELD_ERROR') {
+        await ensureBannedColumn();
+        const [bannedUsers] = await pool.query('SELECT COUNT(*) as count FROM users WHERE banned = 1');
+        bannedUsersCount = bannedUsers[0]?.count || 0;
+      } else {
+        throw e;
+      }
+    }
+    
+    return res.json({
+      totalUsers: totalUsers[0]?.count || 0,
+      newUsers: newUsers[0]?.count || 0,
+      bannedUsers: bannedUsersCount
+    });
+  } catch (e) {
+    console.error('Get user stats error:', e);
+    return res.status(500).json({ error: 'Server error', details: e.message });
+  }
 });
 
 app.get('/health', (req, res) => res.json({ ok: true }));
