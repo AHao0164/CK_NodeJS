@@ -150,7 +150,7 @@ Pipeline tự động chạy khi:
 **A:** Vào tab **Actions** trên GitHub, bạn sẽ thấy workflow đang chạy với icon 🟡.
 
 ### Q: Pipeline fail thì sao?
-**A:** Click vào workflow để xem logs, tìm dòng lỗi (màu đỏ), sửa code và push lại.
+**A:** Click vào workflow để xem logs, tìm dòng lỗi (màu đỏ), sửa code và push lại. Xem [DEBUG_LOI.md](./DEBUG_LOI.md) để biết cách xử lý chi tiết.
 
 ### Q: Có thể tắt pipeline không?
 **A:** Có, xóa hoặc đổi tên file `.github/workflows/ci-cd.yml` (không khuyến nghị).
@@ -158,6 +158,8 @@ Pipeline tự động chạy khi:
 ---
 
 ## 🐛 Xử lý lỗi thường gặp
+
+**👉 Xem hướng dẫn chi tiết:** [DEBUG_LOI.md](./DEBUG_LOI.md)
 
 ### Lỗi: "Workflow not found"
 - ✅ Kiểm tra file có đúng path: `.github/workflows/ci-cd.yml`
