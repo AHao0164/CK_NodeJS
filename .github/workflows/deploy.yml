@@ -23,7 +23,7 @@ jobs:
       
       - name: Setup deployment
         run: |
-          echo "🚀 Starting deployment..."
+          echo "Starting deployment..."
           echo "Branch: ${{ github.ref }}"
           echo "Commit: ${{ github.sha }}"
       

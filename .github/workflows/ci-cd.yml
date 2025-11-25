@@ -30,7 +30,7 @@ jobs:
         working-directory: ./gateway/api-gateway
         run: |
           if [ -f package-lock.json ]; then
-            npm ci
+            npm ci || npm install
           else
             npm install
           fi
@@ -39,7 +39,7 @@ jobs:
         working-directory: ./services/auth-service
         run: |
           if [ -f package-lock.json ]; then
-            npm ci
+            npm ci || npm install
           else
             npm install
           fi
@@ -48,7 +48,7 @@ jobs:
         working-directory: ./services/catalog-service
         run: |
           if [ -f package-lock.json ]; then
-            npm ci
+            npm ci || npm install
           else
             npm install
           fi
@@ -57,7 +57,7 @@ jobs:
         working-directory: ./services/order-service
         run: |
           if [ -f package-lock.json ]; then
-            npm ci
+            npm ci || npm install
           else
             npm install
           fi
@@ -66,7 +66,7 @@ jobs:
         working-directory: ./services/cart-service
         run: |
           if [ -f package-lock.json ]; then
-            npm ci
+            npm ci || npm install
           else
             npm install
           fi
@@ -75,7 +75,7 @@ jobs:
         working-directory: ./services/payment-service
         run: |
           if [ -f package-lock.json ]; then
-            npm ci
+            npm ci || npm install
           else
             npm install
           fi
@@ -84,7 +84,7 @@ jobs:
         working-directory: ./adminapp
         run: |
           if [ -f package-lock.json ]; then
-            npm ci
+            npm ci || npm install
           else
             npm install
           fi
@@ -93,7 +93,7 @@ jobs:
         working-directory: ./webapp
         run: |
           if [ -f package-lock.json ]; then
-            npm ci
+            npm ci || npm install
           else
             npm install
           fi
@@ -188,7 +188,7 @@ jobs:
       
       - name: Deploy notification
         run: |
-          echo "🚀 Deployment would happen here"
+          echo "Deployment would happen here"
           echo "Services built successfully!"
           # Có thể thêm các bước deploy thực tế ở đây:
           # - Deploy to AWS ECS

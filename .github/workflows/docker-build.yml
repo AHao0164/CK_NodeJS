@@ -10,7 +10,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # Thay đổi thành username GitHub của bạn
   IMAGE_PREFIX: ${{ github.repository_owner }}
 
 jobs:
@@ -65,7 +64,8 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-
+            type=sha,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
       
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
