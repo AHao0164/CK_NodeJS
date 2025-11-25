@@ -9,7 +9,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ${{ AHao1604 }}
+  IMAGE_PREFIX: ${{ github.repository_owner }}
 
 jobs:
   deploy:
