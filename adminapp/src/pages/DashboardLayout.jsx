@@ -139,9 +139,11 @@ export default function DashboardLayout() {
       </Drawer>
 
       {/* Main content */}
-      <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
+      <Box component="main" sx={{ flexGrow: 1, p: 3, width: '100%', maxWidth: '100%', overflowX: 'auto' }}>
         <Toolbar />
-        <Outlet />
+        <Box sx={{ width: '100%', maxWidth: '100%' }}>
+          <Outlet />
+        </Box>
       </Box>
     </Box>
   );

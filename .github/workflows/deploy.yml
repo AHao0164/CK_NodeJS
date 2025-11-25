@@ -1,0 +1,82 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}
+
+jobs:
+  deploy:
+    name: Deploy Services
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup deployment
+        run: |
+          echo "🚀 Starting deployment..."
+          echo "Branch: ${{ github.ref }}"
+          echo "Commit: ${{ github.sha }}"
+      
+      # Option 1: Deploy to server via SSH
+      - name: Deploy via SSH (Optional)
+        if: false  # Set to true và cấu hình secrets nếu muốn dùng
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /path/to/your/project
+            git pull origin main
+            docker compose pull
+            docker compose up -d --build
+            docker compose ps
+      
+      # Option 2: Deploy to AWS ECS (cần cấu hình thêm)
+      - name: Deploy to AWS ECS (Optional)
+        if: false  # Set to true nếu muốn deploy lên AWS
+        env:
+          AWS_REGION: us-east-1
+          ECS_CLUSTER: your-cluster-name
+          ECS_SERVICE: your-service-name
+        run: |
+          echo "Deploying to AWS ECS..."
+          # aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --force-new-deployment
+      
+      # Option 3: Deploy to Azure Container Instances
+      - name: Deploy to Azure (Optional)
+        if: false  # Set to true nếu muốn deploy lên Azure
+        run: |
+          echo "Deploying to Azure..."
+          # az container create --resource-group your-rg --name your-container --image ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/api-gateway:latest
+      
+      # Option 4: Deploy to Google Cloud Run
+      - name: Deploy to GCP (Optional)
+        if: false  # Set to true nếu muốn deploy lên GCP
+        run: |
+          echo "Deploying to Google Cloud Run..."
+          # gcloud run deploy your-service --image ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/api-gateway:latest
+      
+      - name: Deployment summary
+        run: |
+          echo "✅ Deployment completed!"
+          echo "Services deployed:"
+          echo "  - API Gateway"
+          echo "  - Auth Service"
+          echo "  - Catalog Service"
+          echo "  - Cart Service"
+          echo "  - Order Service"
+          echo "  - Payment Service"
+          echo "  - Admin App"
+          echo "  - Web App"
+

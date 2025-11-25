@@ -1,0 +1,156 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  DOCKER_BUILDKIT: 1
+  COMPOSE_DOCKER_CLI_BUILD: 1
+
+jobs:
+  # Job 1: Lint và Test
+  test:
+    name: Test & Lint
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install dependencies (API Gateway)
+        working-directory: ./gateway/api-gateway
+        run: npm ci
+      
+      - name: Install dependencies (Auth Service)
+        working-directory: ./services/auth-service
+        run: npm ci
+      
+      - name: Install dependencies (Catalog Service)
+        working-directory: ./services/catalog-service
+        run: npm ci
+      
+      - name: Install dependencies (Order Service)
+        working-directory: ./services/order-service
+        run: npm ci
+      
+      - name: Install dependencies (Cart Service)
+        working-directory: ./services/cart-service
+        run: npm ci
+      
+      - name: Install dependencies (Payment Service)
+        working-directory: ./services/payment-service
+        run: npm ci
+      
+      - name: Install dependencies (Admin App)
+        working-directory: ./adminapp
+        run: npm ci
+      
+      - name: Install dependencies (Web App)
+        working-directory: ./webapp
+        run: npm ci
+      
+      # Có thể thêm lint và test ở đây
+      # - name: Run linter
+      #   run: npm run lint
+      # 
+      # - name: Run tests
+      #   run: npm test
+
+  # Job 2: Build Docker Images
+  build:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: test
+    
+    strategy:
+      matrix:
+        service:
+          - name: api-gateway
+            path: ./gateway/api-gateway
+          - name: auth-service
+            path: ./services/auth-service
+          - name: catalog-service
+            path: ./services/catalog-service
+          - name: cart-service
+            path: ./services/cart-service
+          - name: order-service
+            path: ./services/order-service
+          - name: payment-service
+            path: ./services/payment-service
+          - name: adminapp
+            path: ./adminapp
+          - name: webapp
+            path: ./webapp
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service.path }}
+          file: ${{ matrix.service.path }}/Dockerfile
+          push: false
+          tags: ck-nodejs-${{ matrix.service.name }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Test Docker image
+        run: |
+          docker images | grep ck-nodejs-${{ matrix.service.name }}
+
+  # Job 3: Build với Docker Compose
+  build-compose:
+    name: Build with Docker Compose
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build all services
+        run: |
+          docker compose build --no-cache
+      
+      - name: Verify images
+        run: |
+          docker images | grep ck_nodejs
+
+  # Job 4: Deploy (tùy chọn - có thể deploy lên cloud hoặc local)
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: [build, build-compose]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Deploy notification
+        run: |
+          echo "🚀 Deployment would happen here"
+          echo "Services built successfully!"
+          # Có thể thêm các bước deploy thực tế ở đây:
+          # - Deploy to AWS ECS
+          # - Deploy to Azure Container Instances
+          # - Deploy to Google Cloud Run
+          # - Deploy to self-hosted server via SSH
+

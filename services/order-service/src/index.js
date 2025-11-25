@@ -717,26 +717,42 @@ app.get('/admin/dashboard/simple', async (req, res) => {
         return {
           product_id: p.product_id,
           name: data.name || `Product #${p.product_id}`,
-          quantity: p.total_quantity,
-          revenue: p.total_revenue
+          quantity: Number(p.total_quantity) || 0,
+          revenue: Number(p.total_revenue) || 0
         };
       } catch (e) {
+        console.error(`Failed to get product ${p.product_id} from catalog:`, e.message);
         return {
           product_id: p.product_id,
           name: `Product #${p.product_id}`,
-          quantity: p.total_quantity,
-          revenue: p.total_revenue
+          quantity: Number(p.total_quantity) || 0,
+          revenue: Number(p.total_revenue) || 0
         };
       }
     }));
     
-    return res.json({
+    console.log(`Dashboard simple: ${totalUsers} users, ${totalOrders} orders, ${totalRevenue} revenue, ${enrichedProducts.length} products`);
+    if (enrichedProducts.length > 0) {
+      console.log('Sample enriched product:', JSON.stringify(enrichedProducts[0], null, 2));
+      console.log('All enriched products:', JSON.stringify(enrichedProducts.slice(0, 3), null, 2));
+    }
+    
+    const response = {
       totalUsers,
       newUsers: newUsersCount,
       totalOrders,
       totalRevenue,
       bestSellingProducts: enrichedProducts
-    });
+    };
+    
+    console.log('Response bestSellingProducts count:', response.bestSellingProducts.length);
+    
+    // Set cache control headers
+    res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    
+    return res.json(response);
   } catch (e) {
     console.error('Dashboard simple stats error:', e);
     return res.status(500).json({ error: 'Server error', details: e.message, stack: e.stack });
