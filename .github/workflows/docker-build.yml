@@ -2,11 +2,11 @@ name: Docker Build & Push
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, develop, AHao ]
     tags:
       - 'v*'
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop, AHao ]
 
 env:
   REGISTRY: ghcr.io
@@ -37,8 +37,8 @@ jobs:
             path: ./services/payment-service
           - name: adminapp
             path: ./adminapp
-          - name: webapp
-            path: ./webapp
+          - name: frontend
+            path: ./frontend
     
     steps:
       - name: Checkout code
@@ -77,4 +77,3 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
