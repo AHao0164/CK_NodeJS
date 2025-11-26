@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   mysql:
     image: mysql:8.0
@@ -8,12 +6,26 @@ services:
     ports:
       - "3306:3306"
     volumes:
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./db/init-unified.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-prootpw"]
       interval: 5s
       timeout: 3s
       retries: 30
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - redis-data:/data
 
   phpmyadmin:
     image: phpmyadmin:5
@@ -40,11 +52,17 @@ services:
       - PAYMENT_SERVICE_URL=http://payment-service:3005
       - JWT_SECRET=devsecret
     depends_on:
-      - auth-service
-      - catalog-service
-      - cart-service
-      - order-service
-      - payment-service
+      auth-service:
+        condition: service_healthy
+      catalog-service:
+        condition: service_healthy
+      cart-service:
+        condition: service_healthy
+      order-service:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+    restart: unless-stopped
     ports:
       - "8080:8080"
 
@@ -57,24 +75,28 @@ services:
       - DB_PASSWORD=rootpw
       - DB_DATABASE=auth_db
       - JWT_SECRET=devsecret
-      - ADMIN_SEED_EMAIL=admin@example.com
-      - ADMIN_SEED_PASSWORD=Admin!23456
-      - ADMIN_SEED_FULLNAME=Site Admin
-      - GOOGLE_CLIENT_ID=457335937209-t4gck02qv1tt5jje4qc5vp4ube8o1a9p.apps.googleusercontent.com
-      - GOOGLE_CLIENT_SECRET=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
-      - GOOGLE_CALLBACK_URL=http://localhost:8080/auth/google/callback
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - ADMIN_SEED_EMAIL=tenho051512@gmail.com
+      - ADMIN_SEED_PASSWORD=admin123456
+      - SMTP_HOST=smtp.gmail.com
+      - SMTP_PORT=587
+      - SMTP_USER=tenho051512@gmail.com
+      - SMTP_PASS=mfnebwdvxloigcmb
       - FRONTEND_URL=http://localhost:5173
-      - FACEBOOK_APP_ID=1087431599997832
-      - FACEBOOK_APP_SECRET=162bff487e9959c27d83704ead071393
-      - FACEBOOK_CALLBACK_URL=http://localhost:8080/auth/facebook/callback
-      - EMAIL_HOST=smtp.gmail.com
-      - EMAIL_PORT=587
-      - EMAIL_USER=ledoananhhao2020@gmail.com
-      - EMAIL_PASS=udbstwahppywfrit
-      - EMAIL_FROM=ledoananhhao2020@gmail.com
+      - ADMIN_SEED_FULLNAME=System Administrator
     depends_on:
       mysql:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
   catalog-service:
     build: ./services/catalog-service
@@ -84,11 +106,23 @@ services:
       - DB_USER=root
       - DB_PASSWORD=rootpw
       - DB_DATABASE=catalog_db
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     depends_on:
       mysql:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
     volumes:
       - ./services/catalog-service/uploads:/app/uploads
+      - ./services/catalog-service/src:/app/src:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
   cart-service:
     build: ./services/cart-service
@@ -98,9 +132,22 @@ services:
       - DB_USER=root
       - DB_PASSWORD=rootpw
       - DB_DATABASE=cart_db
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     depends_on:
       mysql:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ./services/cart-service/src:/app/src:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
   order-service:
     build: ./services/order-service
@@ -110,25 +157,49 @@ services:
       - DB_USER=root
       - DB_PASSWORD=rootpw
       - DB_DATABASE=order_db
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - PAYMENT_SERVICE_URL=http://payment-service:3005
       - CATALOG_SERVICE_URL=http://catalog-service:3002
-      - AUTH_SERVICE_URL=http://auth-service:3001
     depends_on:
       mysql:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       payment-service:
         condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
   payment-service:
     build: ./services/payment-service
+    env_file:
+      - ./services/payment-service/.env
     environment:
       - PORT=3005
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - BANK_ACC=0123456789
       - BANK_CODE=VCB
       - QR_TEMPLATE=compact
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
-  webapp:
-    build: ./webapp
+  frontend:
+    build: ./frontend
     environment:
       - VITE_API_BASE=http://localhost:8080
     ports:
@@ -144,6 +215,10 @@ services:
       - "5174:5174"
     depends_on:
       - api-gateway
+
+volumes:
+  redis-data:
+    driver: local
 
 networks:
   default:

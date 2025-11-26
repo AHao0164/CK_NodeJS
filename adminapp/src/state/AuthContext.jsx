@@ -4,19 +4,22 @@ import axios from 'axios';
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [token, setToken] = useState(() => localStorage.getItem('admin_token'));
+  const [token, setToken] = useState(() => sessionStorage.getItem('admin_token'));
   const [user, setUser] = useState(() => {
-    const raw = localStorage.getItem('admin_user');
+    const raw = sessionStorage.getItem('admin_user');
     return raw ? JSON.parse(raw) : null;
   });
 
   useEffect(() => {
-    if (token) localStorage.setItem('admin_token', token); else localStorage.removeItem('admin_token');
-    if (user) localStorage.setItem('admin_user', JSON.stringify(user)); else localStorage.removeItem('admin_user');
+    if (token) sessionStorage.setItem('admin_token', token); else sessionStorage.removeItem('admin_token');
+    if (user) sessionStorage.setItem('admin_user', JSON.stringify(user)); else sessionStorage.removeItem('admin_user');
   }, [token, user]);
 
   const api = useMemo(() => {
-    const instance = axios.create({ baseURL: import.meta.env.VITE_API_BASE || 'http://localhost:8080' });
+    const instance = axios.create({ 
+      baseURL: import.meta.env.VITE_API_BASE || 'http://localhost:8080',
+      timeout: 30000, // 30 seconds timeout
+    });
     instance.interceptors.request.use((config) => {
       if (token) config.headers.Authorization = `Bearer ${token}`;
       return config;
@@ -25,10 +28,10 @@ export function AuthProvider({ children }) {
   }, [token]);
 
   const login = async (email, password) => {
-    const { data } = await axios.post((import.meta.env.VITE_API_BASE || 'http://localhost:8080') + '/auth/login', { email, password });
+    const { data } = await axios.post((import.meta.env.VITE_API_BASE || 'http://localhost:8080') + '/auth/login', { email, password }, { timeout: 30000 });
     const tok = data.token;
     setToken(tok);
-    const me = await axios.get((import.meta.env.VITE_API_BASE || 'http://localhost:8080') + '/auth/me', { headers: { Authorization: `Bearer ${tok}` } });
+    const me = await axios.get((import.meta.env.VITE_API_BASE || 'http://localhost:8080') + '/auth/me', { headers: { Authorization: `Bearer ${tok}` }, timeout: 30000 });
     setUser(me.data);
   };
 
