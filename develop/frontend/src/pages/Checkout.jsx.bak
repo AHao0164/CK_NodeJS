@@ -1,0 +1,279 @@
+import React, { useEffect, useState } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
+import Button from '../components/ui/Button'
+import { Card, CardBody } from '../components/ui/Card'
+import { fetchCart } from '../services/cart'
+import { checkoutOrder, payForOrder, validateCoupon } from '../services/orders'
+import { motion } from 'framer-motion'
+import { useToast } from '../ui/Toast'
+import VI from '../constants/vi'
+import { calculateShippingFee, getShippingInfo } from '../constants/shipping'
+import { getProvinces, getWards } from '../constants/vietnamLocations'
+
+export default function Checkout() {
+  const { api, user } = useAuth()
+  const location = useLocation()
+  const [cart, setCart] = useState({ items: [] })
+  const [catalog, setCatalog] = useState([])
+  const navigate = useNavigate()
+  const toast = useToast()
+  const [shipping, setShipping] = useState({ name: '', phone: '', email: '', address: '', city: '', ward: '' })
+  const [paymentMethod, setPaymentMethod] = useState('') // 'COD' or 'VNPAY'
+  const [agreeTerms, setAgreeTerms] = useState(false)
+  const [showPaymentForm, setShowPaymentForm] = useState(false)
+  const [showOtpForm, setShowOtpForm] = useState(false)
+  const [vnpayData, setVnpayData] = useState({ cardNumber: '', cardHolder: '', expiryDate: '', otp: '' })
+  const [couponCode, setCouponCode] = useState('')
+  const [coupon, setCoupon] = useState(null)
+  const [error, setError] = useState('')
+  const [showDeleteModal, setShowDeleteModal] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState(null)
+  
+  // Load cart and user info
+  useEffect(() => { 
+    Promise.all([
+      fetchCart(api),
+      fetch(`${import.meta.env.VITE_API_BASE || 'http://localhost:8080'}/catalog/products`).then(r => r.json())
+    ]).then(([cartData, productsData]) => {
+      setCart(cartData)
+      setCatalog(Array.isArray(productsData?.items) ? productsData.items : [])
+    })
+
+    // Pre-fill user info if available
+    if (user) {
+      console.log('User data in Checkout:', user)
+      setShipping({
+        name: user.fullname || user.full_name || '',
+        phone: user.phone || '',
+        email: user.email || '',
+        address: user.address || user.address_detail || '',
+        city: user.city || user.province || 'Hà Nội',
+        ward: user.ward || ''
+      })
+    }
+  }, [api, user])
+  
+  function detailsOf(id) { return catalog.find(x => x.id === id) }
+  
+  const subtotal = cart.items.reduce((s, it) => {
+    const p = detailsOf(it.product_id)
+    const originalPrice = p?.price_cents || 0
+    const discountPercent = p?.discount_percent || 0
+    const finalPrice = Math.round(originalPrice * (100 - discountPercent) / 100)
+    return s + finalPrice * it.quantity
+  }, 0)
+
+  const shippingFee = calculateShippingFee(subtotal, shipping.city)
+  const shippingInfo = getShippingInfo(subtotal, shipping.city)
+  
+  const discount = (() => {
+    if (!coupon) return 0
+    if (coupon.type === 'percentage') return Math.floor(subtotal * (coupon.value / 100))
+    if (coupon.type === 'fixed') return Math.min(subtotal, coupon.value)
+    return 0
+  })()
+  
+  const total = subtotal + shippingFee - discount
+
+  const handleClearInfo = (target) => {
+    setDeleteTarget(target)
+    setShowDeleteModal(true)
+  }
+
+  const confirmClear = () => {
+    if (deleteTarget === 'shipping') {
+      setShipping({ name: '', phone: '', email: '', address: '', city: 'Hà Nội', ward: '' })
+      toast.show('Đã xóa thông tin giao hàng', { type: 'success' })
+    }
+    setShowDeleteModal(false)
+    setDeleteTarget(null)
+  }
+  
+  async function pay() {
+    try {
+      const items = cart.items.map(it => {
+        const p = detailsOf(it.product_id)
+        const originalPrice = p?.price_cents || 0
+        const discountPercent = p?.discount_percent || 0
+        const finalPrice = Math.round(originalPrice * (100 - discountPercent) / 100)
+        return { productId: it.product_id, quantity: it.quantity, priceCents: finalPrice }
+      })
+      setError('')
+      const data = await checkoutOrder(api, { items, shipping, billing, couponCode: coupon?.code || couponCode || undefined })
+      if (data.qrUrl) {
+        window.open(data.qrUrl, '_blank')
+      }
+      await payForOrder(api, { orderId: data.orderId, intentId: data.paymentIntentId })
+      toast.show('✓ Thanh toán thành công', { type: 'success' })
+      navigate('/orders')
+    } catch (e) {
+      const msg = e?.response?.data?.details?.join(', ') || e?.response?.data?.error || 'Có lỗi khi thanh toán, vui lòng thử lại'
+      setError(String(msg))
+    }
+  }
+
+  async function applyCoupon() {
+    if (!couponCode) return
+    try {
+      const data = await validateCoupon(api, couponCode)
+      setCoupon(data)
+      toast.show('✓ Áp dụng mã giảm giá thành công', { type: 'success' })
+    } catch (_) {
+      setCoupon(null)
+      setError('Mã giảm giá không hợp lệ hoặc đã hết hạn')
+    }
+  }
+  
+  return (
+    <section className="mx-auto max-w-7xl px-4 py-8">
+      <motion.h2 
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100 font-bitcount"
+      >
+        {VI.checkout.title}
+      </motion.h2>
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <Card>
+            <CardBody>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-base font-semibold">{VI.checkout.shippingAddress}</h3>
+                <button
+                  onClick={() => handleClearInfo('shipping')}
+                  className="px-3 py-1.5 text-xs font-medium text-red-600 bg-white border border-red-300 rounded-lg hover:bg-red-50 hover:text-red-700 hover:border-red-400 transition-all duration-200 active:scale-95 flex items-center gap-1.5"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  Xóa thông tin
+                </button>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                <input className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm dark:bg-slate-800 dark:border-slate-700" placeholder={VI.checkout.fullName} value={shipping.name} onChange={e=>setShipping({ ...shipping, name: e.target.value })} />
+                <input className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm dark:bg-slate-800 dark:border-slate-700" placeholder={VI.checkout.phone} value={shipping.phone} onChange={e=>setShipping({ ...shipping, phone: e.target.value })} />
+                <input className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm md:col-span-2 dark:bg-slate-800 dark:border-slate-700" placeholder={VI.checkout.address} value={shipping.address} onChange={e=>setShipping({ ...shipping, address: e.target.value })} />
+                <select className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm dark:bg-slate-800 dark:border-slate-700 bg-white dark:bg-slate-800" value={shipping.city} onChange={e=>setShipping({ ...shipping, city: e.target.value })}>
+                  <option value="">Chọn tỉnh/thành phố</option>
+                  {getProvinces().map(city => (
+                    <option key={city} value={city}>{city}</option>
+                  ))}
+                </select>
+                {shipping.city && getWards(shipping.city).length > 0 ? (
+                  <select className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm dark:bg-slate-800 dark:border-slate-700 bg-white dark:bg-slate-800" value={shipping.ward} onChange={e=>setShipping({ ...shipping, ward: e.target.value })}>
+                    <option value="">Chọn phường/xã</option>
+                    {getWards(shipping.city).map(ward => (
+                      <option key={ward} value={ward}>{ward}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm dark:bg-slate-800 dark:border-slate-700" placeholder="Phường/Xã" value={shipping.ward} onChange={e=>setShipping({ ...shipping, ward: e.target.value })} />
+                )}
+              </div>
+              <div className="flex items-center justify-between mt-6 mb-4">
+                <h3 className="text-base font-semibold">{VI.checkout.billingInfo}</h3>
+                <button
+                  onClick={() => handleClearInfo('billing')}
+                  className="px-3 py-1.5 text-xs font-medium text-red-600 bg-white border border-red-300 rounded-lg hover:bg-red-50 hover:text-red-700 hover:border-red-400 transition-all duration-200 active:scale-95 flex items-center gap-1.5"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  Xóa thông tin
+                </button>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                <input className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm dark:bg-slate-800 dark:border-slate-700" placeholder={VI.checkout.billingName} value={billing.name} onChange={e=>setBilling({ ...billing, name: e.target.value })} />
+                <input className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm dark:bg-slate-800 dark:border-slate-700" placeholder={VI.checkout.phone} value={billing.phone} onChange={e=>setBilling({ ...billing, phone: e.target.value })} />
+                <input className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm md:col-span-2 dark:bg-slate-800 dark:border-slate-700" placeholder={VI.checkout.billingAddress} value={billing.address} onChange={e=>setBilling({ ...billing, address: e.target.value })} />
+              </div>
+            </CardBody>
+          </Card>
+        </div>
+        <div>
+          <Card>
+            <CardBody>
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between"><span>{VI.checkout.subtotal}</span><span>{(subtotal/100).toLocaleString()} ₫</span></div>
+                <div className="flex justify-between">
+                  <span>{VI.checkout.shipping}</span>
+                  <span className={shippingFee === 0 ? 'text-emerald-600 font-medium' : ''}>
+                    {shippingFee === 0 ? 'Miễn phí' : `${(shippingFee/100).toLocaleString()} ₫`}
+                  </span>
+                </div>
+                {shippingInfo.canGetFreeShip && (
+                  <div className="text-xs text-amber-600 flex items-center gap-1">
+                    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                    </svg>
+                    <span>{shippingInfo.message}</span>
+                  </div>
+                )}
+                {discount > 0 && (
+                  <div className="flex justify-between text-emerald-700"><span>{VI.checkout.discount} ({coupon?.code})</span><span>-{(discount/100).toLocaleString()} ₫</span></div>
+                )}
+                <div className="flex justify-between font-semibold text-base pt-2 border-t"><span>{VI.checkout.total}</span><span>{(total/100).toLocaleString()} ₫</span></div>
+              </div>
+              <div className="mt-3 flex gap-2">
+                <input className="h-11 flex-1 rounded-lg border border-slate-300 px-3 text-sm dark:bg-slate-800 dark:border-slate-700" placeholder={VI.checkout.couponCode} value={couponCode} onChange={e=>setCouponCode(e.target.value.toUpperCase())} />
+                <Button onClick={applyCoupon} variant="outline">{VI.checkout.apply}</Button>
+              </div>
+              {error && <div className="mt-2 text-center text-xs text-red-600">{error}</div>}
+              <Button onClick={pay} className="mt-4 w-full" disabled={cart.items.length===0}>{VI.checkout.confirmPayment}</Button>
+              {cart.items.length===0 && (
+                <div className="mt-2 text-center text-xs text-amber-600">{VI.checkout.emptyCart}</div>
+              )}
+            </CardBody>
+          </Card>
+        </div>
+      </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+          onClick={() => setShowDeleteModal(false)}
+        >
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex flex-col items-center text-center">
+              <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center mb-4">
+                <svg className="w-8 h-8 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <h3 className="text-xl font-bold text-slate-900 dark:text-slate-100 mb-2">
+                Xác nhận xóa
+              </h3>
+              <p className="text-slate-600 dark:text-slate-400 mb-6">
+                Bạn có chắc chắn muốn xóa {deleteTarget === 'shipping' ? 'thông tin giao hàng' : 'thông tin thanh toán'} không?
+              </p>
+              <div className="flex gap-3 w-full">
+                <button
+                  onClick={() => setShowDeleteModal(false)}
+                  className="flex-1 px-4 py-2.5 rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition-all duration-200 active:scale-95"
+                >
+                  Hủy
+                </button>
+                <button
+                  onClick={confirmClear}
+                  className="flex-1 px-4 py-2.5 rounded-lg bg-red-600 text-white font-medium hover:bg-red-700 transition-all duration-200 active:scale-95 shadow-lg shadow-red-500/30"
+                >
+                  Xóa
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </section>
+  )
+}
+

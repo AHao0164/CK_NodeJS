@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}
+
+/* Responsive Tables */
+@media (max-width: 640px) {
+    .MuiTableCell-root {
+        padding: 12px 8px !important;
+        font-size: 0.875rem !important;
+    }
+    
+    .MuiTableCell-head {
+        font-weight: 600 !important;
+    }
+}
+
+@media (min-width: 641px) and (max-width: 1024px) {
+    .MuiTableCell-root {
+        padding: 14px 12px !important;
+    }
+}
+
+@media (min-width: 1025px) {
+    .MuiTableCell-root {
+        padding: 16px !important;
+    }
+}
+
+/* Card spacing optimization */
+.MuiCard-root {
+    transition: all 0.3s ease !important;
+}
+
+/* Mobile optimization */
+@media (max-width: 640px) {
+    .MuiPaper-root {
+        border-radius: 12px !important;
+    }
+    
+    .MuiButton-root {
+        min-width: unset !important;
+    }
+    
+    .MuiChip-root {
+        font-size: 0.75rem !important;
+        height: 24px !important;
+    }
+}
+
+/* Tablet optimization */
+@media (min-width: 641px) and (max-width: 1024px) {
+    .MuiContainer-root {
+        padding-left: 24px !important;
+        padding-right: 24px !important;
+    }
+}
+
+/* Desktop optimization */
+@media (min-width: 1025px) {
+    .MuiContainer-root {
+        max-width: 1600px !important;
+    }
+}
