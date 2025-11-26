@@ -1,0 +1,112 @@
+.dock-outer {
+  margin: 0 0.5rem;
+  display: flex;
+  max-width: 100%;
+  align-items: center;
+}
+
+.dock-panel {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: flex-end;
+  width: fit-content;
+  gap: 1rem;
+  border-radius: 1rem;
+  background-color: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0 0.5rem 0.5rem;
+  box-shadow: 0 10px 40px rgba(8, 15, 35, 0.35);
+  z-index: 9990;
+}
+
+.dark .dock-panel {
+  background-color: rgba(6, 11, 25, 0.98);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.dock-item {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(244, 44, 55, 0.03) 0%, rgba(15, 23, 42, 0.9) 100%);
+  border: 1px solid rgba(244, 44, 55, 0.15);
+  box-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.2),
+    0 2px 4px -1px rgba(0, 0, 0, 0.1);
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.dock-item:hover {
+  background: linear-gradient(135deg, rgba(244, 44, 55, 0.1) 0%, rgba(15, 23, 42, 0.95) 100%);
+  border-color: rgba(244, 44, 55, 0.3);
+  box-shadow:
+    0 6px 12px -2px rgba(244, 44, 55, 0.3),
+    0 4px 8px -1px rgba(0, 0, 0, 0.15);
+}
+
+.dark .dock-item {
+  background: linear-gradient(135deg, rgba(244, 44, 55, 0.05) 0%, rgba(15, 23, 42, 0.95) 100%);
+  border: 1px solid rgba(244, 44, 55, 0.2);
+}
+
+.dark .dock-item:hover {
+  background: linear-gradient(135deg, rgba(244, 44, 55, 0.12) 0%, rgba(15, 23, 42, 1) 100%);
+  border-color: rgba(244, 44, 55, 0.35);
+}
+
+.dock-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+
+.dock-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.dock-label {
+  position: absolute;
+  top: -2.5rem;
+  left: 50%;
+  width: fit-content;
+  white-space: pre;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(244, 44, 55, 0.3);
+  background: linear-gradient(135deg, rgba(244, 44, 55, 0.95) 0%, rgba(15, 23, 42, 0.98) 100%);
+  backdrop-filter: blur(10px);
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #fff;
+  transform: translateX(-50%);
+  box-shadow: 0 4px 12px rgba(244, 44, 55, 0.2);
+  z-index: 10000;
+}
+
+.dark .dock-label {
+  background: linear-gradient(135deg, rgba(244, 44, 55, 1) 0%, rgba(15, 23, 42, 1) 100%);
+  border-color: rgba(244, 44, 55, 0.4);
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  .dock-panel {
+    gap: 0.5rem;
+    padding: 0 0.25rem 0.25rem;
+  }
+  
+  .dock-icon svg {
+    width: 18px;
+    height: 18px;
+  }
+}
+
