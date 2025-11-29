@@ -8,8 +8,8 @@ RUN npm run build
 FROM node:20-alpine
 WORKDIR /app
 ENV NODE_ENV=production
+# Install serve globally for serving static files
+RUN npm install -g serve@14.2.5
 COPY --from=build /app/dist ./dist
-COPY package.json ./
-RUN npm install --omit=dev
 EXPOSE 5173
-CMD ["npx", "serve", "-s", "dist", "-l", "tcp://0.0.0.0:5173"]
+CMD ["serve", "-s", "dist", "-l", "tcp://0.0.0.0:5173"]

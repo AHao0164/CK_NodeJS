@@ -7,7 +7,8 @@ import mysql from 'mysql2/promise';
 import nodemailer from 'nodemailer';
 import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
-import session from 'express-session';
+import { Strategy as FacebookStrategy } from 'passport-facebook';
+import crypto from 'crypto';
 import RedisLockManager from '../shared/RedisLockManager.js';
 
 const app = express();
@@ -20,18 +21,21 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json());
-app.use(morgan('dev'));
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'session-secret-key',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { secure: false } // Set to true if using HTTPS
-}));
 app.use(passport.initialize());
-app.use(passport.session());
+app.use(morgan('dev'));
 
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'devsecret';
+
+// OAuth Configuration
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+const GOOGLE_CALLBACK_URL = process.env.GOOGLE_CALLBACK_URL || 'http://localhost:8080/auth/google/callback';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+const FACEBOOK_APP_ID = process.env.FACEBOOK_APP_ID || '';
+const FACEBOOK_APP_SECRET = process.env.FACEBOOK_APP_SECRET || '';
+const FACEBOOK_CALLBACK_URL = process.env.FACEBOOK_CALLBACK_URL || 'http://localhost:8080/auth/facebook/callback';
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
@@ -75,6 +79,23 @@ function formatVietnameseDate() {
   const hours = vnTime.getHours().toString().padStart(2, '0');
   const minutes = vnTime.getMinutes().toString().padStart(2, '0');
   return `${day}/${month}/${year} lúc ${hours}:${minutes}`;
+}
+
+// Wait for database to be ready
+async function waitForDatabase(maxRetries = 30, delay = 1000) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const conn = await pool.getConnection();
+      await conn.ping();
+      conn.release();
+      console.log('Database connection established');
+      return true;
+    } catch (err) {
+      console.log(`Waiting for database... attempt ${i + 1}/${maxRetries}`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  throw new Error('Could not connect to database after maximum retries');
 }
 
 // Ensure initial admin user if env provided
@@ -129,61 +150,124 @@ async function ensureInitialAdmin() {
   }
 }
 
-ensureInitialAdmin();
+// Initialize database and admin user
+async function initializeService() {
+  try {
+    await waitForDatabase();
+    await ensureInitialAdmin();
+  } catch (err) {
+    console.error('Failed to initialize service:', err);
+    process.exit(1);
+  }
+}
+
+initializeService();
 
 // Passport Google OAuth Configuration
-passport.use(new GoogleStrategy({
-  clientID: process.env.GOOGLE_CLIENT_ID || 'your-google-client-id',
-  clientSecret: process.env.GOOGLE_CLIENT_SECRET || 'your-google-client-secret',
-  callbackURL: process.env.GOOGLE_CALLBACK_URL || 'http://localhost:8080/auth/google/callback'
-},
-async (accessToken, refreshToken, profile, done) => {
-  try {
-    const email = profile.emails[0].value;
-    const fullName = profile.displayName;
-    const googleId = profile.id;
+if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
+  passport.use(new GoogleStrategy({
+    clientID: GOOGLE_CLIENT_ID,
+    clientSecret: GOOGLE_CLIENT_SECRET,
+    callbackURL: GOOGLE_CALLBACK_URL,
+    scope: ['profile', 'email']
+  }, async (accessToken, refreshToken, profile, done) => {
+    try {
+      const email = profile.emails[0].value;
+      const fullName = profile.displayName;
+      const oauthProvider = 'google';
+      const oauthId = profile.id;
 
-    // Check if user exists
-    let [rows] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
-    
-    if (rows.length > 0) {
-      // User exists, update google_id if not set
-      const user = rows[0];
-      if (!user.google_id) {
-        await pool.query('UPDATE users SET google_id = ? WHERE id = ?', [googleId, user.id]);
-      }
-      return done(null, user);
-    } else {
-      // Create new user
-      const [result] = await pool.execute(
-        'INSERT INTO users (email, full_name, google_id) VALUES (?, ?, ?)',
-        [email, fullName, googleId]
+      // Tìm user theo oauth_provider và oauth_id
+      let [users] = await pool.query(
+        'SELECT * FROM users WHERE oauth_provider = ? AND oauth_id = ?',
+        [oauthProvider, oauthId]
       );
-      const newUser = {
-        id: result.insertId,
-        email,
-        full_name: fullName,
-        google_id: googleId
-      };
-      return done(null, newUser);
+
+      let user;
+      if (users.length > 0) {
+        // User đã tồn tại
+        user = users[0];
+      } else {
+        // Kiểm tra xem email đã tồn tại chưa (có thể đã đăng ký bằng email/password)
+        [users] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
+        
+        if (users.length > 0) {
+          // Link OAuth với tài khoản hiện có
+          user = users[0];
+          await pool.query(
+            'UPDATE users SET oauth_provider = ?, oauth_id = ? WHERE id = ?',
+            [oauthProvider, oauthId, user.id]
+          );
+        } else {
+          // Tạo user mới
+          const [result] = await pool.query(
+            'INSERT INTO users (email, full_name, oauth_provider, oauth_id, password_hash) VALUES (?, ?, ?, ?, ?)',
+            [email, fullName, oauthProvider, oauthId, ''] // password_hash rỗng cho OAuth users
+          );
+          user = { id: result.insertId, email, full_name: fullName };
+        }
+      }
+
+      return done(null, user);
+    } catch (error) {
+      console.error('Google OAuth error:', error);
+      return done(error, null);
     }
-  } catch (error) {
-    return done(error, null);
-  }
-}));
+  }));
+}
 
-passport.serializeUser((user, done) => {
-  done(null, user.id);
-});
+// Passport Facebook OAuth Configuration
+if (FACEBOOK_APP_ID && FACEBOOK_APP_SECRET) {
+  passport.use(new FacebookStrategy({
+    clientID: FACEBOOK_APP_ID,
+    clientSecret: FACEBOOK_APP_SECRET,
+    callbackURL: FACEBOOK_CALLBACK_URL,
+    profileFields: ['id', 'emails', 'name', 'displayName']
+  }, async (accessToken, refreshToken, profile, done) => {
+    try {
+      // Email có thể không có nếu user không cấp quyền
+      const email = profile.emails && profile.emails[0] ? profile.emails[0].value : `fb_${profile.id}@facebook.oauth`;
+      const fullName = profile.displayName;
+      const oauthProvider = 'facebook';
+      const oauthId = profile.id;
 
-passport.deserializeUser(async (id, done) => {
-  try {
-    const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [id]);
-    done(null, rows[0]);
-  } catch (error) {
-    done(error, null);
-  }
-});
+      // Tìm user theo oauth_provider và oauth_id
+      let [users] = await pool.query(
+        'SELECT * FROM users WHERE oauth_provider = ? AND oauth_id = ?',
+        [oauthProvider, oauthId]
+      );
+
+      let user;
+      if (users.length > 0) {
+        user = users[0];
+      } else {
+        // Kiểm tra email đã tồn tại chưa
+        [users] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
+        
+        if (users.length > 0) {
+          // Link OAuth với tài khoản hiện có
+          user = users[0];
+          await pool.query(
+            'UPDATE users SET oauth_provider = ?, oauth_id = ? WHERE id = ?',
+            [oauthProvider, oauthId, user.id]
+          );
+        } else {
+          // Tạo user mới
+          const [result] = await pool.query(
+            'INSERT INTO users (email, full_name, oauth_provider, oauth_id, password_hash) VALUES (?, ?, ?, ?, ?)',
+            [email, fullName, oauthProvider, oauthId, '']
+          );
+          user = { id: result.insertId, email, full_name: fullName };
+        }
+      }
+
+      return done(null, user);
+    } catch (error) {
+      console.error('Facebook OAuth error:', error);
+      return done(error, null);
+    }
+  }));
+}
 
 app.post('/auth/signup', async (req, res) => {
   const { email, password, fullName } = req.body;
@@ -203,6 +287,63 @@ app.post('/auth/signup', async (req, res) => {
     if (e && e.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: 'Email already exists' });
     }
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Ensure a user exists for guest checkout (auto-create account if needed)
+app.post('/auth/ensure-guest', async (req, res) => {
+  try {
+    const { email, fullName, phone, province, ward, addressDetail } = req.body || {};
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    // Basic email format validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+
+    // Try to find existing user
+    const [rows] = await pool.query(
+      'SELECT id, email, full_name, phone, province, ward, address_detail FROM users WHERE email = ?',
+      [email]
+    );
+
+    if (rows[0]) {
+      const existing = rows[0];
+      // Optionally enrich missing contact fields
+      const needsUpdate =
+        (fullName && !existing.full_name) ||
+        (phone && !existing.phone) ||
+        (province && !existing.province) ||
+        (ward && !existing.ward) ||
+        (addressDetail && !existing.address_detail);
+
+      if (needsUpdate) {
+        await pool.query(
+          'UPDATE users SET full_name = COALESCE(full_name, ?), phone = COALESCE(phone, ?), province = COALESCE(province, ?), ward = COALESCE(ward, ?), address_detail = COALESCE(address_detail, ?) WHERE id = ?',
+          [fullName || null, phone || null, province || null, ward || null, addressDetail || null, existing.id]
+        );
+      }
+
+      return res.json({ id: existing.id, email: existing.email, existing: true });
+    }
+
+    // Create a new "guest" user with a random password
+    const randomPassword = crypto.randomBytes(16).toString('hex');
+    const passwordHash = await bcrypt.hash(randomPassword, 10);
+
+    const [result] = await pool.query(
+      'INSERT INTO users (email, password_hash, full_name, phone, province, ward, address_detail) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [email, passwordHash, fullName || null, phone || null, province || null, ward || null, addressDetail || null]
+    );
+
+    return res.status(201).json({ id: result.insertId, email, existing: false });
+  } catch (e) {
+    console.error('ensure-guest error:', e);
     return res.status(500).json({ error: 'Server error' });
   }
 });
@@ -989,6 +1130,402 @@ app.get('/auth/profile', async (req, res) => {
   }
 });
 
+// ===============================
+// Shipping Addresses Management
+// ===============================
+
+// Helper to extract user id from Authorization header
+async function getUserIdFromRequest(req, res) {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token) {
+    res.status(401).json({ error: 'Missing token' });
+    return null;
+  }
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    return payload.sub;
+  } catch (e) {
+    res.status(401).json({ error: 'Invalid token' });
+    return null;
+  }
+}
+
+// Get all addresses of current user
+app.get('/auth/addresses', async (req, res) => {
+  try {
+    const userId = await getUserIdFromRequest(req, res);
+    if (!userId) return;
+
+    const [rows] = await pool.query(
+      'SELECT id, full_name, phone, province, district, ward, address_detail, is_default, created_at, updated_at FROM addresses WHERE user_id = ? ORDER BY is_default DESC, created_at DESC',
+      [userId]
+    );
+
+    return res.json(rows.map(a => ({
+      id: a.id,
+      fullName: a.full_name,
+      phone: a.phone,
+      province: a.province,
+      district: a.district,
+      ward: a.ward,
+      addressDetail: a.address_detail,
+      isDefault: !!a.is_default,
+      createdAt: a.created_at,
+      updatedAt: a.updated_at
+    })));
+  } catch (e) {
+    console.error('Get addresses error:', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Create new address
+app.post('/auth/addresses', async (req, res) => {
+  try {
+    const userId = await getUserIdFromRequest(req, res);
+    if (!userId) return;
+
+    const {
+      fullName,
+      phone,
+      province,
+      ward,
+      addressDetail,
+      district,
+      isDefault
+    } = req.body || {};
+
+    if (!fullName || fullName.trim().length < 2) {
+      return res.status(400).json({ error: 'Full name is required' });
+    }
+    if (!phone || !/^\d{10,11}$/.test(String(phone).replace(/\s/g, ''))) {
+      return res.status(400).json({ error: 'Phone must be 10-11 digits' });
+    }
+    if (!province) {
+      return res.status(400).json({ error: 'Province is required' });
+    }
+    if (!ward) {
+      return res.status(400).json({ error: 'Ward is required' });
+    }
+    if (!addressDetail || addressDetail.trim().length < 3) {
+      return res.status(400).json({ error: 'Address detail is required' });
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      // Determine if this should be default address
+      const [existing] = await conn.query(
+        'SELECT id FROM addresses WHERE user_id = ? AND is_default = 1 LIMIT 1',
+        [userId]
+      );
+
+      const makeDefault = isDefault || !existing[0];
+
+      if (makeDefault) {
+        await conn.query(
+          'UPDATE addresses SET is_default = 0 WHERE user_id = ?',
+          [userId]
+        );
+      }
+
+      const districtValue = district || province; // fallback while UI chưa có quận/huyện riêng
+
+      const [result] = await conn.query(
+        'INSERT INTO addresses (user_id, full_name, phone, province, district, ward, address_detail, is_default) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [userId, fullName.trim(), String(phone).replace(/\s/g, ''), province, districtValue, ward, addressDetail.trim(), makeDefault ? 1 : 0]
+      );
+
+      const newId = result.insertId;
+
+      // If default, also sync to users table so các chỗ khác (checkout, profile) dùng được ngay
+      if (makeDefault) {
+        await conn.query(
+          'UPDATE users SET full_name = ?, phone = ?, province = ?, ward = ?, address_detail = ? WHERE id = ?',
+          [fullName.trim(), String(phone).replace(/\s/g, ''), province, ward, addressDetail.trim(), userId]
+        );
+      }
+
+      await conn.commit();
+
+      return res.status(201).json({
+        id: newId,
+        fullName: fullName.trim(),
+        phone: String(phone).replace(/\s/g, ''),
+        province,
+        district: districtValue,
+        ward,
+        addressDetail: addressDetail.trim(),
+        isDefault: makeDefault
+      });
+    } catch (e) {
+      await conn.rollback();
+      console.error('Create address error:', e);
+      return res.status(500).json({ error: 'Server error' });
+    } finally {
+      conn.release();
+    }
+  } catch (e) {
+    console.error('Create address unexpected error:', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Update an address
+app.patch('/auth/addresses/:id', async (req, res) => {
+  try {
+    const userId = await getUserIdFromRequest(req, res);
+    if (!userId) return;
+
+    const addressId = parseInt(req.params.id, 10);
+    if (!addressId || Number.isNaN(addressId)) {
+      return res.status(400).json({ error: 'Invalid address id' });
+    }
+
+    const {
+      fullName,
+      phone,
+      province,
+      ward,
+      addressDetail,
+      district,
+      isDefault
+    } = req.body || {};
+
+    // Ensure the address belongs to user
+    const [[existing]] = await pool.query(
+      'SELECT * FROM addresses WHERE id = ? AND user_id = ?',
+      [addressId, userId]
+    );
+    if (!existing) {
+      return res.status(404).json({ error: 'Address not found' });
+    }
+
+    const updates = [];
+    const values = [];
+
+    if (fullName !== undefined) {
+      if (!fullName || fullName.trim().length < 2) {
+        return res.status(400).json({ error: 'Full name is required' });
+      }
+      updates.push('full_name = ?');
+      values.push(fullName.trim());
+    }
+
+    if (phone !== undefined) {
+      const cleanPhone = String(phone).replace(/\s/g, '');
+      if (!cleanPhone || !/^\d{10,11}$/.test(cleanPhone)) {
+        return res.status(400).json({ error: 'Phone must be 10-11 digits' });
+      }
+      updates.push('phone = ?');
+      values.push(cleanPhone);
+    }
+
+    if (province !== undefined) {
+      if (!province) {
+        return res.status(400).json({ error: 'Province is required' });
+      }
+      updates.push('province = ?');
+      values.push(province);
+    }
+
+    if (ward !== undefined) {
+      if (!ward) {
+        return res.status(400).json({ error: 'Ward is required' });
+      }
+      updates.push('ward = ?');
+      values.push(ward);
+    }
+
+    if (district !== undefined) {
+      updates.push('district = ?');
+      values.push(district || province || existing.province);
+    }
+
+    if (addressDetail !== undefined) {
+      if (!addressDetail || addressDetail.trim().length < 3) {
+        return res.status(400).json({ error: 'Address detail is required' });
+      }
+      updates.push('address_detail = ?');
+      values.push(addressDetail.trim());
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      if (updates.length > 0) {
+        values.push(addressId, userId);
+        await conn.query(
+          `UPDATE addresses SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`,
+          values
+        );
+      }
+
+      // Handle default flag separately
+      if (isDefault === true) {
+        await conn.query(
+          'UPDATE addresses SET is_default = 0 WHERE user_id = ?',
+          [userId]
+        );
+        await conn.query(
+          'UPDATE addresses SET is_default = 1 WHERE id = ? AND user_id = ?',
+          [addressId, userId]
+        );
+
+        // Sync to users table using latest address data
+        const [[addr]] = await conn.query(
+          'SELECT full_name, phone, province, ward, address_detail FROM addresses WHERE id = ? AND user_id = ?',
+          [addressId, userId]
+        );
+        if (addr) {
+          await conn.query(
+            'UPDATE users SET full_name = ?, phone = ?, province = ?, ward = ?, address_detail = ? WHERE id = ?',
+            [addr.full_name, addr.phone, addr.province, addr.ward, addr.address_detail, userId]
+          );
+        }
+      }
+
+      await conn.commit();
+
+      return res.json({ ok: true });
+    } catch (e) {
+      await conn.rollback();
+      console.error('Update address error:', e);
+      return res.status(500).json({ error: 'Server error' });
+    } finally {
+      conn.release();
+    }
+  } catch (e) {
+    console.error('Update address unexpected error:', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Delete an address
+app.delete('/auth/addresses/:id', async (req, res) => {
+  try {
+    const userId = await getUserIdFromRequest(req, res);
+    if (!userId) return;
+
+    const addressId = parseInt(req.params.id, 10);
+    if (!addressId || Number.isNaN(addressId)) {
+      return res.status(400).json({ error: 'Invalid address id' });
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [[addr]] = await conn.query(
+        'SELECT id, is_default FROM addresses WHERE id = ? AND user_id = ?',
+        [addressId, userId]
+      );
+
+      if (!addr) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'Address not found' });
+      }
+
+      await conn.query(
+        'DELETE FROM addresses WHERE id = ? AND user_id = ?',
+        [addressId, userId]
+      );
+
+      // If deleted address was default, pick another one (most recent) as default and sync to users
+      if (addr.is_default) {
+        const [[fallback]] = await conn.query(
+          'SELECT id, full_name, phone, province, ward, address_detail FROM addresses WHERE user_id = ? ORDER BY created_at DESC LIMIT 1',
+          [userId]
+        );
+
+        if (fallback) {
+          await conn.query(
+            'UPDATE addresses SET is_default = 1 WHERE id = ?',
+            [fallback.id]
+          );
+          await conn.query(
+            'UPDATE users SET full_name = ?, phone = ?, province = ?, ward = ?, address_detail = ? WHERE id = ?',
+            [fallback.full_name, fallback.phone, fallback.province, fallback.ward, fallback.address_detail, userId]
+          );
+        } else {
+          // No addresses left, do not clear user info but keep existing profile fields
+        }
+      }
+
+      await conn.commit();
+
+      return res.json({ ok: true });
+    } catch (e) {
+      await conn.rollback();
+      console.error('Delete address error:', e);
+      return res.status(500).json({ error: 'Server error' });
+    } finally {
+      conn.release();
+    }
+  } catch (e) {
+    console.error('Delete address unexpected error:', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Set an address as default explicitly
+app.patch('/auth/addresses/:id/default', async (req, res) => {
+  try {
+    const userId = await getUserIdFromRequest(req, res);
+    if (!userId) return;
+
+    const addressId = parseInt(req.params.id, 10);
+    if (!addressId || Number.isNaN(addressId)) {
+      return res.status(400).json({ error: 'Invalid address id' });
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [[addr]] = await conn.query(
+        'SELECT id, full_name, phone, province, ward, address_detail FROM addresses WHERE id = ? AND user_id = ?',
+        [addressId, userId]
+      );
+
+      if (!addr) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'Address not found' });
+      }
+
+      await conn.query(
+        'UPDATE addresses SET is_default = 0 WHERE user_id = ?',
+        [userId]
+      );
+      await conn.query(
+        'UPDATE addresses SET is_default = 1 WHERE id = ? AND user_id = ?',
+        [addressId, userId]
+      );
+
+      await conn.query(
+        'UPDATE users SET full_name = ?, phone = ?, province = ?, ward = ?, address_detail = ? WHERE id = ?',
+        [addr.full_name, addr.phone, addr.province, addr.ward, addr.address_detail, userId]
+      );
+
+      await conn.commit();
+
+      return res.json({ ok: true });
+    } catch (e) {
+      await conn.rollback();
+      console.error('Set default address error:', e);
+      return res.status(500).json({ error: 'Server error' });
+    } finally {
+      conn.release();
+    }
+  } catch (e) {
+    console.error('Set default address unexpected error:', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Send COD OTP for checkout
 app.post('/auth/send-cod-otp', async (req, res) => {
   const authHeader = req.headers.authorization || '';
@@ -1145,7 +1682,173 @@ app.post('/auth/verify-cod-otp', async (req, res) => {
   }
 });
 
-// Send reset password OTP
+// Helper function to send reset password email (token-based)
+async function sendResetEmail(email, token) {
+  if (!transporter) {
+    throw new Error('Email service not configured');
+  }
+
+  const resetLink = `${FRONTEND_URL}/reset-password?token=${token}`;
+  
+  const mailOptions = {
+    from: `"GearUp Shop" <${process.env.SMTP_USER || 'noreply@gearup.vn'}>`,
+    to: email,
+    subject: 'Đặt lại mật khẩu - GearUp Shop',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2>Yêu cầu đặt lại mật khẩu</h2>
+        <p>Bạn đã yêu cầu đặt lại mật khẩu cho tài khoản của mình.</p>
+        <p>Click vào nút bên dưới để đặt lại mật khẩu:</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${resetLink}" 
+             style="background-color: #4CAF50; 
+                    color: white; 
+                    padding: 12px 30px; 
+                    text-decoration: none; 
+                    border-radius: 4px;
+                    display: inline-block;">
+            Đặt lại mật khẩu
+          </a>
+        </div>
+        <p>Hoặc copy link sau vào trình duyệt:</p>
+        <p style="word-break: break-all; color: #666;">${resetLink}</p>
+        <p><strong>Lưu ý:</strong></p>
+        <ul>
+          <li>Link này chỉ có hiệu lực trong 1 giờ</li>
+          <li>Nếu bạn không yêu cầu đặt lại mật khẩu, vui lòng bỏ qua email này</li>
+        </ul>
+        <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;">
+        <p style="color: #999; font-size: 12px;">
+          Email này được gửi từ GearUp Shop. Vui lòng không trả lời email này.
+        </p>
+      </div>
+    `
+  };
+
+  await transporter.sendMail(mailOptions);
+}
+
+// POST /auth/forgot-password (Token-based - from services1)
+// This endpoint supports both OTP-based (existing) and token-based (new) reset
+app.post('/auth/forgot-password-token', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    // Kiểm tra user tồn tại
+    const [users] = await pool.query('SELECT id, email FROM users WHERE email = ?', [email]);
+    
+    if (users.length === 0) {
+      // Không tiết lộ email không tồn tại (security best practice)
+      return res.json({ message: 'If email exists, reset link will be sent' });
+    }
+
+    const user = users[0];
+
+    // Tạo reset token
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 3600000); // 1 hour
+
+    // Lưu token vào database
+    await pool.query(
+      'INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?, ?, ?)',
+      [user.id, token, expiresAt]
+    );
+
+    // Gửi email
+    try {
+      await sendResetEmail(email, token);
+      res.json({ message: 'Reset password email sent' });
+    } catch (emailError) {
+      console.error('Failed to send email:', emailError);
+      res.status(500).json({ error: 'Failed to send email' });
+    }
+
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /auth/reset-password-token - Đặt lại mật khẩu với token
+app.post('/auth/reset-password-token', async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+
+    if (!token || !newPassword) {
+      return res.status(400).json({ error: 'Token and new password are required' });
+    }
+
+    // Validate password strength
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+
+    // Tìm token trong database
+    const [tokens] = await pool.query(
+      'SELECT * FROM password_reset_tokens WHERE token = ? AND used = 0 AND expires_at > NOW()',
+      [token]
+    );
+
+    if (tokens.length === 0) {
+      return res.status(400).json({ error: 'Invalid or expired token' });
+    }
+
+    const resetToken = tokens[0];
+
+    // Hash password mới
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Cập nhật password
+    await pool.query(
+      'UPDATE users SET password_hash = ? WHERE id = ?',
+      [hashedPassword, resetToken.user_id]
+    );
+
+    // Đánh dấu token đã sử dụng
+    await pool.query(
+      'UPDATE password_reset_tokens SET used = 1 WHERE id = ?',
+      [resetToken.id]
+    );
+
+    res.json({ message: 'Password reset successfully' });
+
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /auth/verify-reset-token - Kiểm tra token còn hợp lệ không
+app.get('/auth/verify-reset-token', async (req, res) => {
+  try {
+    const { token } = req.query;
+
+    if (!token) {
+      return res.status(400).json({ valid: false, error: 'Token is required' });
+    }
+
+    const [tokens] = await pool.query(
+      'SELECT * FROM password_reset_tokens WHERE token = ? AND used = 0 AND expires_at > NOW()',
+      [token]
+    );
+
+    if (tokens.length === 0) {
+      return res.json({ valid: false });
+    }
+
+    res.json({ valid: true });
+
+  } catch (error) {
+    console.error('Verify token error:', error);
+    res.status(500).json({ valid: false, error: 'Server error' });
+  }
+});
+
+// Send reset password OTP (existing - keep for backward compatibility)
 app.post('/auth/forgot-password', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Email is required' });
@@ -1301,28 +2004,60 @@ app.post('/auth/reset-password', async (req, res) => {
 
 // Google OAuth routes
 app.get('/auth/google',
-  passport.authenticate('google', { scope: ['profile', 'email'] })
+  passport.authenticate('google', { 
+    session: false,
+    scope: ['profile', 'email'] 
+  })
 );
 
 app.get('/auth/google/callback',
-  passport.authenticate('google', { failureRedirect: process.env.FRONTEND_URL || 'http://localhost:5175/login' }),
-  async (req, res) => {
+  passport.authenticate('google', { 
+    session: false,
+    failureRedirect: `${FRONTEND_URL}/login?error=oauth_failed` 
+  }),
+  (req, res) => {
     try {
-      // Generate JWT token for the authenticated user
-      const user = req.user;
-      const token = jwt.sign({ 
-        sub: user.id, 
-        email: user.email, 
-        role: user.role || 'USER' 
-      }, JWT_SECRET, { expiresIn: '7d' });
-      
-      // Redirect to frontend with token
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5175';
-      res.redirect(`${frontendUrl}/auth/callback?token=${token}`);
+      // Tạo JWT token với format giống login thường
+      const token = jwt.sign(
+        { sub: req.user.id, email: req.user.email, role: req.user.role || 'USER' },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      // Redirect về frontend với token
+      res.redirect(`${FRONTEND_URL}/login?token=${token}&email=${encodeURIComponent(req.user.email)}`);
     } catch (error) {
-      console.error('Google callback error:', error);
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5175';
-      res.redirect(`${frontendUrl}/login?error=auth_failed`);
+      console.error('Token generation error:', error);
+      res.redirect(`${FRONTEND_URL}/login?error=token_failed`);
+    }
+  }
+);
+
+// Facebook OAuth routes
+app.get('/auth/facebook',
+  passport.authenticate('facebook', { 
+    session: false,
+    scope: ['public_profile'] 
+  })
+);
+
+app.get('/auth/facebook/callback',
+  passport.authenticate('facebook', { 
+    session: false,
+    failureRedirect: `${FRONTEND_URL}/login?error=oauth_failed` 
+  }),
+  (req, res) => {
+    try {
+      const token = jwt.sign(
+        { userId: req.user.id, email: req.user.email },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      res.redirect(`${FRONTEND_URL}/login?token=${token}&email=${encodeURIComponent(req.user.email)}`);
+    } catch (error) {
+      console.error('Token generation error:', error);
+      res.redirect(`${FRONTEND_URL}/login?error=token_failed`);
     }
   }
 );

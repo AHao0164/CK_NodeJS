@@ -17,6 +17,7 @@
     "mysql2": "^3.11.3",
     "nodemailer": "^6.9.7",
     "passport": "^0.7.0",
+    "passport-facebook": "^3.0.0",
     "passport-google-oauth20": "^2.0.0",
     "redis": "^4.7.1"
   }

@@ -11,7 +11,21 @@ export function CartProvider({ children }) {
 
   const loadCartCount = async () => {
     if (!token) {
-      setCartCount(0)
+      // Load guest cart count from sessionStorage
+      try {
+        const storedGuestCartItems = JSON.parse(sessionStorage.getItem('guestCartItems') || '[]')
+        const count = storedGuestCartItems.reduce((sum, item) => sum + (item.quantity || 0), 0)
+        const oldCount = cartCount
+        setCartCount(count)
+        
+        // Show badge if cart count increased
+        if (count > oldCount) {
+          setShowBadge(true)
+        }
+      } catch (e) {
+        console.error('Load guest cart count error:', e)
+        setCartCount(0)
+      }
       return
     }
     try {
@@ -33,7 +47,28 @@ export function CartProvider({ children }) {
     loadCartCount()
     // Auto refresh cart count every 30 seconds
     const interval = setInterval(loadCartCount, 30000)
-    return () => clearInterval(interval)
+    
+    // For guest users, also listen to storage events (when cart is updated from another tab/window)
+    const handleStorageChange = (e) => {
+      if (e.key === 'guestCartItems' && !token) {
+        loadCartCount()
+      }
+    }
+    window.addEventListener('storage', handleStorageChange)
+    
+    // Also poll sessionStorage for guest users (in case storage event doesn't fire in same tab)
+    let guestPollInterval = null
+    if (!token) {
+      guestPollInterval = setInterval(() => {
+        loadCartCount()
+      }, 2000) // Check every 2 seconds for guest users
+    }
+    
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener('storage', handleStorageChange)
+      if (guestPollInterval) clearInterval(guestPollInterval)
+    }
   }, [token])
 
   const dismissBadge = () => {

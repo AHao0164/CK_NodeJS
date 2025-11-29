@@ -420,6 +420,53 @@ app.get('/catalog/categories/:categoryId/products', async (req, res) => {
   }
 });
 
+// Guest cart endpoint (no authentication required)
+app.post('/catalog/guest-cart', async (req, res) => {
+  const { guestCartId, productId, quantity, priceCents } = req.body;
+  if (!productId || !quantity || !priceCents) {
+    return res.status(400).json({ error: 'Missing fields' });
+  }
+
+  let currentGuestCartId = guestCartId;
+  if (!currentGuestCartId) {
+    // Generate a new ID for the guest cart (simple nanoid-like)
+    currentGuestCartId = `guest_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // Ensure guest cart exists or create it
+    await conn.query(
+      'INSERT IGNORE INTO guest_carts (id, created_at) VALUES (?, NOW())',
+      [currentGuestCartId]
+    );
+
+    // Add/update item in guest_cart_items
+    await conn.query(
+      `INSERT INTO guest_cart_items (guest_cart_id, product_id, quantity, price_cents)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity)`,
+      [currentGuestCartId, productId, quantity, priceCents]
+    );
+
+    const [items] = await conn.query(
+      'SELECT * FROM guest_cart_items WHERE guest_cart_id = ?',
+      [currentGuestCartId]
+    );
+    
+    await conn.commit();
+    return res.status(201).json({ guestCartId: currentGuestCartId, items });
+  } catch (e) {
+    await conn.rollback();
+    console.error('Error adding to guest cart:', e);
+    return res.status(500).json({ error: 'Server error' });
+  } finally {
+    conn.release();
+  }
+});
+
 app.get('/health', async (req, res) => {
   try {
     await pool.query('SELECT 1');
@@ -1520,6 +1567,37 @@ app.post('/catalog/inventory/release', async (req, res) => {
   }
 });
 
+// Ensure guest cart tables exist
+async function ensureGuestCartSchema() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS guest_carts (
+        id VARCHAR(255) PRIMARY KEY,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS guest_cart_items (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        guest_cart_id VARCHAR(255) NOT NULL,
+        product_id INT NOT NULL,
+        quantity INT NOT NULL DEFAULT 1,
+        price_cents INT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY (guest_cart_id, product_id),
+        FOREIGN KEY (guest_cart_id) REFERENCES guest_carts(id) ON DELETE CASCADE,
+        INDEX idx_guest_cart_id (guest_cart_id),
+        INDEX idx_product_id (product_id)
+      )
+    `);
+    console.log('✅ Guest cart tables ready');
+  } catch (e) {
+    console.error('❌ Error ensuring guest cart schema:', e);
+  }
+}
+
 // Connect to Redis on startup
 lockManager.connect().then(() => {
   console.log('✅ Catalog service Redis lock manager ready');
@@ -1527,6 +1605,9 @@ lockManager.connect().then(() => {
   console.error('❌ Redis connection failed:', err);
   console.warn('⚠️ Service will run WITHOUT distributed locks');
 });
+
+// Ensure schema on startup
+ensureGuestCartSchema();
 
 app.listen(PORT, () => {
   // eslint-disable-next-line no-console

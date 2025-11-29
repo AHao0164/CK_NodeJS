@@ -85,6 +85,12 @@ services:
       - SMTP_PASS=mfnebwdvxloigcmb
       - FRONTEND_URL=http://localhost:5173
       - ADMIN_SEED_FULLNAME=System Administrator
+      - GOOGLE_CLIENT_ID=457335937209-t4gck02qv1tt5jje4qc5vp4ube8o1a9p.apps.googleusercontent.com
+      - GOOGLE_CLIENT_SECRET=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
+      - GOOGLE_CALLBACK_URL=http://localhost:8080/auth/google/callback
+      - FACEBOOK_APP_ID=1087431599997832
+      - FACEBOOK_APP_SECRET=162bff487e9959c27d83704ead071393
+      - FACEBOOK_CALLBACK_URL=http://localhost:8080/auth/facebook/callback
     depends_on:
       mysql:
         condition: service_healthy
@@ -161,6 +167,7 @@ services:
       - REDIS_PORT=6379
       - PAYMENT_SERVICE_URL=http://payment-service:3005
       - CATALOG_SERVICE_URL=http://catalog-service:3002
+      - AUTH_SERVICE_URL=http://auth-service:3001
     depends_on:
       mysql:
         condition: service_healthy

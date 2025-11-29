@@ -13,7 +13,7 @@ import { getProvinces, getWards } from '../constants/vietnamLocations'
 import { getCurrentUser } from '../services/auth'
 
 export default function Checkout() {
-  const { api, user } = useAuth()
+  const { api, user, token } = useAuth()
   const location = useLocation()
   const [cart, setCart] = useState({ items: [] })
   const [catalog, setCatalog] = useState([])
@@ -41,30 +41,74 @@ export default function Checkout() {
     document.title = 'Thanh toán - GearUp';
   }, []);
 
-  // Load cart and user info
+  // Load cart / guest items and (nếu có) thông tin user
   useEffect(() => { 
-    Promise.all([
-      fetchCart(api),
-      fetch(`${import.meta.env.VITE_API_BASE || 'http://localhost:8080'}/catalog/products`).then(r => r.json()),
-      getCurrentUser(api)
-    ]).then(([cartData, productsData, userData]) => {
-      setCart(cartData)
-      setCatalog(Array.isArray(productsData?.items) ? productsData.items : [])
-      
-      // Pre-fill shipping info from fresh user data
-      if (userData) {
-        console.log('User data in Checkout:', userData)
-        setShipping({
-          name: userData.fullname || userData.full_name || '',
-          phone: userData.phone || '',
-          email: userData.email || '',
-          address: userData.address || userData.address_detail || '',
-          city: userData.city || userData.province || '',
-          ward: userData.ward || ''
-        })
+    let ignore = false
+
+    const loadForAuthenticatedUser = async () => {
+      try {
+        const [cartData, productsData, userData] = await Promise.all([
+          fetchCart(api),
+          fetch(`${import.meta.env.VITE_API_BASE || 'http://localhost:8080'}/catalog/products`).then(r => r.json()),
+          getCurrentUser(api)
+        ])
+        if (ignore) return
+        setCart(cartData)
+        setCatalog(Array.isArray(productsData?.items) ? productsData.items : [])
+        
+        // Pre-fill shipping info from fresh user data
+        if (userData) {
+          console.log('User data in Checkout:', userData)
+          setShipping({
+            name: userData.fullname || userData.full_name || '',
+            phone: userData.phone || '',
+            email: userData.email || '',
+            address: userData.address || userData.address_detail || '',
+            city: userData.city || userData.province || '',
+            ward: userData.ward || ''
+          })
+        }
+      } catch (e) {
+        console.error('Checkout load (auth) error:', e)
+      } finally {
+        if (!ignore) setLoading(false)
       }
-    })
-  }, [api])
+    }
+
+    const loadForGuest = async () => {
+      try {
+        const guestItems = Array.isArray(location.state?.guestItems) ? location.state.guestItems : []
+        // Map guest items sang cấu trúc giống cart.items (product_id, quantity, id tạm)
+        const mapped = guestItems.map((it, idx) => ({
+          id: idx + 1,
+          product_id: it.productId,
+          quantity: it.quantity,
+          priceCents: it.priceCents
+        }))
+        if (!ignore) {
+          setCart({ items: mapped })
+        }
+        // Load catalog công khai để hiển thị thông tin sản phẩm
+        const productsData = await fetch(`${import.meta.env.VITE_API_BASE || 'http://localhost:8080'}/catalog/products`).then(r => r.json())
+        if (!ignore) {
+          setCatalog(Array.isArray(productsData?.items) ? productsData.items : [])
+        }
+      } catch (e) {
+        console.error('Checkout load (guest) error:', e)
+      } finally {
+        if (!ignore) setLoading(false)
+      }
+    }
+
+    setLoading(true)
+    if (token) {
+      loadForAuthenticatedUser()
+    } else {
+      loadForGuest()
+    }
+
+    return () => { ignore = true }
+  }, [api, token, location.state])
   
   function detailsOf(id) { return catalog.find(x => x.id === id) }
   
@@ -129,6 +173,12 @@ export default function Checkout() {
     }
     if (!agreeTerms) {
       toast.show('❌ Vui lòng đồng ý với điều khoản thanh toán', { type: 'error' })
+      return
+    }
+
+    // Khách chưa đăng nhập không được dùng COD (chỉ hỗ trợ VNPay)
+    if (!token && paymentMethod === 'COD') {
+      toast.show('❌ Vui lòng đăng nhập để sử dụng thanh toán COD', { type: 'error' })
       return
     }
 
