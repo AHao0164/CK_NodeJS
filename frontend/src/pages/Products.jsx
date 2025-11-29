@@ -11,6 +11,10 @@ export default function Products() {
 	const [data, setData] = useState({ items: [], page: 1, pageSize: 20, total: 0 })
 	const [brands, setBrands] = useState([])
 	const [categories, setCategories] = useState([])
+	const [viewMode, setViewMode] = useState(() => {
+		// Load from localStorage or default to 'grid'
+		return localStorage.getItem('productViewMode') || 'grid'
+	})
 	
 	const q = params.get('q') || ''
 	const page = parseInt(params.get('page') || '1', 10)
@@ -19,6 +23,15 @@ export default function Products() {
 	const brandId = params.get('brandId') || ''
 	const minPrice = params.get('minPrice') || ''
 	const maxPrice = params.get('maxPrice') || ''
+	
+	// Calculate current price filter value for select
+	const currentPriceFilter = useMemo(() => {
+		if (minPrice && maxPrice) {
+			return `${minPrice}-${maxPrice}`;
+		}
+		return '';
+	}, [minPrice, maxPrice]);
+	const minRating = params.get('minRating') || ''
 
 	useEffect(() => {
 		document.title = 'Sản phẩm - GearUp';
@@ -40,11 +53,11 @@ export default function Products() {
 	useEffect(() => {
 		let ignore = false
 		setLoading(true)
-		listProducts({ q, page, sort, categoryId, brandId, minPrice, maxPrice }).then((res) => {
+		listProducts({ q, page, sort, categoryId, brandId, minPrice, maxPrice, minRating }).then((res) => {
 			if (!ignore) setData(res)
 		}).finally(() => setLoading(false))
 		return () => { ignore = true }
-	}, [q, page, sort, categoryId, brandId, minPrice, maxPrice])
+	}, [q, page, sort, categoryId, brandId, minPrice, maxPrice, minRating])
 
 	const totalPages = useMemo(() => Math.max(1, Math.ceil(data.total / data.pageSize)), [data])
 
@@ -52,6 +65,11 @@ export default function Products() {
 		const next = new URLSearchParams(params)
 		if (value) next.set(key, value); else next.delete(key)
 		setParams(next)
+	}
+
+	function handleViewModeChange(mode) {
+		setViewMode(mode)
+		localStorage.setItem('productViewMode', mode)
 	}
 
 	return (
@@ -82,13 +100,12 @@ export default function Products() {
 				</div>
 
 			{/* Filters Row */}
-			<div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4">
-				<div className="flex flex-wrap items-center gap-4">
+			<div className="bg-gradient-to-r from-slate-50 to-slate-100 dark:from-slate-800/50 dark:to-slate-900/50 rounded-2xl p-5 shadow-sm border border-slate-200/50 dark:border-slate-700/50">
+				<div className="flex flex-wrap items-center gap-3">
 					{/* Category Filter */}
-					<div className="flex items-center gap-2">
-						<span className="text-sm font-semibold text-slate-700 dark:text-slate-300">📁</span>
+					<div className="flex items-center gap-2 flex-shrink-0">
 						<select 
-							className="h-10 rounded-lg border border-slate-300 bg-white px-3 pr-8 text-sm font-medium transition-all hover:border-slate-400 focus:border-primary focus:ring-2 focus:ring-primary/20 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-100" 
+							className="h-10 min-w-[160px] rounded-xl border-2 border-slate-200 bg-white px-4 pr-9 text-sm font-medium transition-all hover:border-blue-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:bg-slate-800 dark:border-slate-600 dark:text-slate-100 dark:hover:border-blue-600 dark:focus:border-blue-500 cursor-pointer appearance-none bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22currentColor%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpolyline points=%226 9 12 15 18 9%22%3E%3C/polyline%3E%3C/svg%3E')] bg-no-repeat bg-right-2 bg-[length:20px]" 
 							value={categoryId} 
 							onChange={(e) => updateParam('categoryId', e.target.value)}
 						>
@@ -100,70 +117,98 @@ export default function Products() {
 					</div>
 					
 					{/* Brand Filter */}
-					<div className="flex items-center gap-2">
-						<span className="text-sm font-semibold text-slate-700 dark:text-slate-300">🏷️</span>
+					<div className="flex items-center gap-2 flex-shrink-0">
 						<select 
-							className="h-10 rounded-lg border border-slate-300 bg-white px-3 pr-8 text-sm font-medium transition-all hover:border-slate-400 focus:border-primary focus:ring-2 focus:ring-primary/20 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-100" 
+							className="h-10 min-w-[160px] rounded-xl border-2 border-slate-200 bg-white px-4 pr-9 text-sm font-medium transition-all hover:border-purple-300 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 dark:bg-slate-800 dark:border-slate-600 dark:text-slate-100 dark:hover:border-purple-600 dark:focus:border-purple-500 cursor-pointer appearance-none bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22currentColor%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpolyline points=%226 9 12 15 18 9%22%3E%3C/polyline%3E%3C/svg%3E')] bg-no-repeat bg-right-2 bg-[length:20px]" 
 							value={brandId} 
 							onChange={(e) => updateParam('brandId', e.target.value)}
 						>
-						<option value="">Tất cả hãng</option>
-						{brands.map(brand => (
-							<option key={brand.id} value={brand.id}>{brand.name}</option>
-						))}
+							<option value="">Tất cả hãng</option>
+							{brands.map(brand => (
+								<option key={brand.id} value={brand.id}>{brand.name}</option>
+							))}
 						</select>
 					</div>
 					
-					{/* Price Filter */}
-					<div className="flex items-center gap-2">
-						<span className="text-sm font-semibold text-slate-700 dark:text-slate-300">💰</span>
+					{/* Rating Filter */}
+					<div className="flex items-center gap-2 flex-shrink-0">
 						<select 
-							className="h-10 rounded-lg border border-slate-300 bg-white px-3 pr-8 text-sm font-medium transition-all hover:border-slate-400 focus:border-primary focus:ring-2 focus:ring-primary/20 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-100" 
-							value={minPrice ? `${minPrice}-${maxPrice}` : ''} 
-							onChange={(e) => {
-								const [min, max] = e.target.value.split('-')
-								updateParam('minPrice', min)
-								updateParam('maxPrice', max)
-							}}
+							className="h-10 min-w-[160px] rounded-xl border-2 border-slate-200 bg-white px-4 pr-9 text-sm font-medium transition-all hover:border-yellow-300 focus:border-yellow-500 focus:ring-2 focus:ring-yellow-500/20 dark:bg-slate-800 dark:border-slate-600 dark:text-slate-100 dark:hover:border-yellow-600 dark:focus:border-yellow-500 cursor-pointer appearance-none bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22currentColor%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpolyline points=%226 9 12 15 18 9%22%3E%3C/polyline%3E%3C/svg%3E')] bg-no-repeat bg-right-2 bg-[length:20px]" 
+							value={minRating} 
+							onChange={(e) => updateParam('minRating', e.target.value)}
 						>
-							<option value="">Tất cả mức giá</option>
-							<option value="0-10000000">Dưới 10 triệu</option>
-							<option value="10000000-20000000">10 - 20 triệu</option>
-							<option value="20000000-30000000">20 - 30 triệu</option>
-							<option value="30000000-40000000">30 - 40 triệu</option>
-							<option value="40000000-50000000">40 - 50 triệu</option>
-							<option value="50000000-999999999">Trên 50 triệu</option>
+							<option value="">Tất cả đánh giá</option>
+							<option value="4.5">4.5 sao trở lên</option>
+							<option value="4.0">4.0 sao trở lên</option>
+							<option value="3.5">3.5 sao trở lên</option>
+							<option value="3.0">3.0 sao trở lên</option>
+							<option value="2.0">2.0 sao trở lên</option>
+							<option value="1.0">1.0 sao trở lên</option>
 						</select>
+					</div>
+					
+					{/* View Mode Toggle */}
+					<div className="flex items-center gap-2 flex-shrink-0">
+						<div className="flex items-center border-2 border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden bg-white dark:bg-slate-800 shadow-sm">
+							<button
+								onClick={() => handleViewModeChange('grid')}
+								className={`px-4 py-2.5 transition-all ${
+									viewMode === 'grid'
+										? 'bg-gradient-to-r from-primary to-primary/90 text-white shadow-md'
+										: 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
+								}`}
+								title="Grid View"
+							>
+								<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+								</svg>
+							</button>
+							<button
+								onClick={() => handleViewModeChange('list')}
+								className={`px-4 py-2.5 transition-all border-l-2 border-slate-200 dark:border-slate-700 ${
+									viewMode === 'list'
+										? 'bg-gradient-to-r from-primary to-primary/90 text-white shadow-md'
+										: 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
+								}`}
+								title="List View"
+							>
+								<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+								</svg>
+							</button>
+						</div>
 					</div>
 					
 					{/* Sort */}
-					<div className="flex items-center gap-2 ml-auto">
-						<span className="text-sm font-semibold text-slate-700 dark:text-slate-300">🔄</span>
+					<div className="flex items-center gap-2 flex-shrink-0 ml-auto">
 						<select 
-							className="h-10 rounded-lg border border-slate-300 bg-white px-3 pr-8 text-sm font-medium transition-all hover:border-slate-400 focus:border-primary focus:ring-2 focus:ring-primary/20 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-100" 
+							className="h-10 min-w-[180px] rounded-xl border-2 border-slate-200 bg-white px-4 pr-9 text-sm font-medium transition-all hover:border-cyan-300 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 dark:bg-slate-800 dark:border-slate-600 dark:text-slate-100 dark:hover:border-cyan-600 dark:focus:border-cyan-500 cursor-pointer appearance-none bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22currentColor%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpolyline points=%226 9 12 15 18 9%22%3E%3C/polyline%3E%3C/svg%3E')] bg-no-repeat bg-right-2 bg-[length:20px]" 
 							value={sort} 
 							onChange={(e) => updateParam('sort', e.target.value)}
 						>
 							<option value="id_desc">Mới nhất</option>
-							<option value="price_asc">{VI.products.priceLowToHigh}</option>
-							<option value="price_desc">{VI.products.priceHighToLow}</option>
-							<option value="name_asc">{VI.products.nameAZ}</option>
-							<option value="name_desc">{VI.products.nameZA}</option>
+							<option value="price_asc">Giá: Thấp đến Cao</option>
+							<option value="price_desc">Giá: Cao đến Thấp</option>
+							<option value="name_asc">Tên: A-Z</option>
+							<option value="name_desc">Tên: Z-A</option>
 						</select>
 					</div>
 					
 					{/* Clear Filters */}
-					{(q || categoryId || brandId || minPrice) && (
+					{(q || categoryId || brandId || minRating) && (
 						<button 
-							className="h-10 rounded-lg border-2 border-red-200 bg-red-50 px-4 text-sm font-medium text-red-600 transition-all hover:bg-red-100 hover:border-red-300 dark:bg-red-900/20 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/30" 
+							className="h-10 rounded-xl border-2 border-red-300 bg-gradient-to-r from-red-50 to-red-100 px-4 text-sm font-semibold text-red-700 transition-all hover:from-red-100 hover:to-red-200 hover:border-red-400 hover:shadow-md dark:from-red-900/20 dark:to-red-900/30 dark:border-red-700 dark:text-red-400 dark:hover:from-red-900/30 dark:hover:to-red-900/40 flex items-center gap-2" 
 							onClick={() => setParams({})}
 						>
+							<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+							</svg>
 							{VI.products.clearFilters}
 						</button>
 					)}
 				</div>
 			</div>				{/* Active Filters Display */}
-				{(q || categoryId || brandId || minPrice) && (
+				{(q || categoryId || brandId || minPrice || minRating) && (
 					<div className="flex flex-wrap items-center gap-2 text-sm">
 						<span className="text-slate-600 dark:text-slate-400">Đang lọc:</span>
 						{q && (
@@ -184,12 +229,10 @@ export default function Products() {
 								<button onClick={() => updateParam('brandId', '')} className="hover:text-green-900">×</button>
 							</span>
 						)}
-						{minPrice && (
-							<span className="inline-flex items-center gap-1 rounded-lg bg-orange-100 px-3 py-1 text-orange-700 font-medium dark:bg-orange-900/30 dark:text-orange-400">
-								{parseInt(minPrice) === 0 ? `Dưới ${(parseInt(maxPrice)/1000000).toFixed(0)} triệu` :
-								 parseInt(maxPrice) > 50000000 ? `Trên ${(parseInt(minPrice)/1000000).toFixed(0)} triệu` :
-								 `${(parseInt(minPrice)/1000000).toFixed(0)} - ${(parseInt(maxPrice)/1000000).toFixed(0)} triệu`}
-								<button onClick={() => { updateParam('minPrice', ''); updateParam('maxPrice', ''); }} className="hover:text-orange-900">×</button>
+						{minRating && (
+							<span className="inline-flex items-center gap-1 rounded-lg bg-yellow-100 px-3 py-1 text-yellow-700 font-medium dark:bg-yellow-900/30 dark:text-yellow-400">
+								⭐ {parseFloat(minRating).toFixed(1)}+ sao
+								<button onClick={() => updateParam('minRating', '')} className="hover:text-yellow-900">×</button>
 							</span>
 						)}
 					</div>
@@ -226,7 +269,7 @@ export default function Products() {
 					<p className="text-slate-600 dark:text-slate-400 mb-6">
 						{VI.products.tryAdjustingFilters}
 					</p>
-					{(q || categoryId || brandId || minPrice) && (
+					{(q || categoryId || brandId || minRating) && (
 						<button 
 							className="btn btn-primary rounded-xl px-6"
 							onClick={() => setParams({})}
@@ -235,7 +278,8 @@ export default function Products() {
 						</button>
 					)}
 				</motion.div>
-			) : (
+			) : viewMode === 'grid' ? (
+				// Grid View
                 <motion.div 
 					initial={{ opacity: 0 }}
 					animate={{ opacity: 1 }}
@@ -292,10 +336,85 @@ export default function Products() {
 						);
 					})}
 				</motion.div>
+			) : (
+				// List View
+				<motion.div 
+					initial={{ opacity: 0 }}
+					animate={{ opacity: 1 }}
+					className="space-y-4"
+				>
+					{data.items.map((p, idx) => {
+						const originalPrice = Number(p.price_cents || 0);
+						const discountPercent = Number(p.discount_percent || 0);
+						const finalPrice = Math.round(originalPrice * (100 - discountPercent) / 100);
+						
+						return (
+							<motion.div
+								key={p.id}
+								initial={{ opacity: 0, x: -20 }}
+								animate={{ opacity: 1, x: 0 }}
+								transition={{ delay: idx * 0.03 }}
+							>
+								<Link to={`/product/${p.id}`} className="card block overflow-hidden group relative hover:shadow-xl transition-shadow duration-300">
+									<div className="flex flex-col sm:flex-row gap-4 p-4">
+										{/* Image */}
+										<div className="w-full sm:w-48 h-48 bg-slate-100 overflow-hidden relative flex-shrink-0 rounded-lg">
+											{discountPercent > 0 && (
+												<div className="absolute top-3 left-3 z-10 bg-gradient-to-r from-red-500 to-red-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow-lg">
+													-{discountPercent}%
+												</div>
+											)}
+											{p.stock === 0 && (
+												<div className="absolute inset-0 bg-black/50 flex items-center justify-center z-10">
+													<span className="bg-white text-slate-900 px-4 py-2 rounded-lg font-semibold text-sm">
+														Hết hàng
+													</span>
+												</div>
+											)}
+											<img 
+												src={(p.image_url && (/^https?:\/\//.test(p.image_url) ? p.image_url : (import.meta.env.VITE_API_BASE || 'http://localhost:8080') + p.image_url)) || 'https://images.unsplash.com/photo-1517336714731-489689fd1ca8?q=80&w=2068&auto=format&fit=crop'} 
+												alt={p.name} 
+												className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" 
+											/>
+										</div>
+										
+										{/* Content */}
+										<div className="flex-1 flex flex-col justify-between">
+											<div>
+												<h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-2">
+													{p.name}
+												</h3>
+												<p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
+													{p.brand} • {getCategoryVietnameseName(p.category)}
+												</p>
+												{p.description && (
+													<p className="text-sm text-slate-600 dark:text-slate-400 line-clamp-2 mb-3">
+														{p.description}
+													</p>
+												)}
+											</div>
+											<div className="flex items-center justify-between">
+												<div className="flex items-baseline gap-2">
+													<p className="text-xl font-bold text-primary">{finalPrice.toLocaleString('vi-VN')} ₫</p>
+													{discountPercent > 0 && (
+														<p className="text-sm text-slate-400 line-through">{originalPrice.toLocaleString('vi-VN')} ₫</p>
+													)}
+												</div>
+												<button className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors text-sm font-medium">
+													Xem chi tiết
+												</button>
+											</div>
+										</div>
+									</div>
+								</Link>
+							</motion.div>
+						);
+					})}
+				</motion.div>
 			)}
 
-			{/* Pagination */}
-			{!loading && data.items.length > 0 && totalPages > 1 && (
+			{/* Pagination - Always show page numbers, even if only 1 page */}
+			{!loading && data.items.length > 0 && totalPages >= 1 && (
 				<div className="mt-12 flex items-center justify-center gap-2">
 					<button 
 						className="btn btn-outline rounded-xl px-4 h-11 disabled:opacity-50 disabled:cursor-not-allowed" 

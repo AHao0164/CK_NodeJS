@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { FaCartPlus, FaHeadset, FaHeart, FaShare, FaStar, FaChevronLeft, FaChevronRight, FaRegStar } from 'react-icons/fa';
+import { io } from 'socket.io-client';
 import { addItemToCart, addGuestItemToCart } from '../../services/cart';
 import { getProductById } from '../../services/catalog';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useCart } from '../../context/CartContext.jsx';
 import { useToast } from '../../ui/Toast';
@@ -30,14 +31,20 @@ const ProductDetail = () => {
   const [error, setError] = useState('');
   const [product, setProduct] = useState(null);
   const [availableStock, setAvailableStock] = useState(0);
+  const [variants, setVariants] = useState([]);
+  const [selectedVariant, setSelectedVariant] = useState(null);
+  const [productCategory, setProductCategory] = useState(null); // Store category info for breadcrumb
   
   // Reviews state
   const [reviews, setReviews] = useState([]);
+  const [guestComments, setGuestComments] = useState([]); // Guest comments (no rating)
   const [reviewsStats, setReviewsStats] = useState({ average: 0, total: 0, filtered: 0 });
   const [reviewsDistribution, setReviewsDistribution] = useState({});
   const [userRating, setUserRating] = useState(0);
   const [userComment, setUserComment] = useState('');
   const [submittingReview, setSubmittingReview] = useState(false);
+  const [guestName, setGuestName] = useState(''); // Optional name for guest comments
+  const [submittingGuestComment, setSubmittingGuestComment] = useState(false);
   
   // Pagination & Filter state
   const [reviewsPage, setReviewsPage] = useState(1);
@@ -50,6 +57,9 @@ const ProductDetail = () => {
   const [submittingReply, setSubmittingReply] = useState(false);
   const [unreadReplies, setUnreadReplies] = useState(0); // Badge count
   const [autoRefreshing, setAutoRefreshing] = useState(false); // Auto-refresh indicator
+  
+  // WebSocket connection
+  const socketRef = useRef(null);
 
   // Dữ liệu sản phẩm mẫu fallback
   const fallbackProduct = {
@@ -127,6 +137,7 @@ const ProductDetail = () => {
         const data = await res.json();
         console.log('Reviews loaded:', data);
         setReviews(data.reviews || []);
+        setGuestComments(data.guestComments || []); // Load guest comments
         setReviewsStats(data.stats || { average: 0, total: 0, filtered: 0 });
         setReviewsDistribution(data.distribution || {});
         
@@ -164,6 +175,11 @@ const ProductDetail = () => {
       try {
         const p = await getProductById(pid);
         
+        // Lưu category info cho breadcrumb
+        if (p.category_id && p.category) {
+          setProductCategory({ id: p.category_id, name: p.category });
+        }
+        
         // Tính giảm giá từ discount_percent
         const discountPercent = p.discount_percent || 0;
         const finalPrice = Math.round(p.price_cents * (100 - discountPercent) / 100);
@@ -196,13 +212,36 @@ const ProductDetail = () => {
           console.error('Failed to load related products:', err);
         }
         
+        // Handle variants
+        const hasVariants = p.variants && Array.isArray(p.variants) && p.variants.length > 0;
+        let defaultVariant = null;
+        let productPrice = finalPrice;
+        let productOriginalPrice = p.price_cents;
+        let productDiscount = discountPercent;
+        let productStock = p.stock || 0;
+        
+        if (hasVariants) {
+          setVariants(p.variants);
+          // Select first variant by default
+          defaultVariant = p.variants[0];
+          setSelectedVariant(defaultVariant);
+          const variantDiscount = defaultVariant.discount_percent || 0;
+          productPrice = Math.round(defaultVariant.price_cents * (100 - variantDiscount) / 100);
+          productOriginalPrice = defaultVariant.price_cents;
+          productDiscount = variantDiscount;
+          productStock = defaultVariant.stock || 0;
+        } else {
+          setVariants([]);
+          setSelectedVariant(null);
+        }
+        
         const mapped = {
           id: p.id,
           name: p.name,
           description: p.description,
-          price: finalPrice,
-          originalPrice: p.price_cents,
-          discount: discountPercent,
+          price: productPrice,
+          originalPrice: productOriginalPrice,
+          discount: productDiscount,
           rating: reviewData.average || 0,
           reviewCount: reviewData.total || 0,
           images: Array.isArray(p.images) && p.images.length ? p.images.map(img => img.url) : fallbackProduct.images,
@@ -220,7 +259,7 @@ const ProductDetail = () => {
           mapped: mapped.features
         });
         setProduct(mapped);
-        setAvailableStock(p.stock || 0);
+        setAvailableStock(productStock);
         
         // Set document title
         document.title = `${p.name} - GearUp`;
@@ -236,21 +275,105 @@ const ProductDetail = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeId]);
 
-  // Auto-refresh reviews mỗi 10s
+  // WebSocket connection for real-time reviews (required feature)
   useEffect(() => {
     if (!routeId) return;
     
-    const interval = setInterval(() => {
-      const pid = Number(routeId);
-      if (pid && !isNaN(pid)) {
-        setAutoRefreshing(true);
-        loadReviews(pid).finally(() => {
-          setTimeout(() => setAutoRefreshing(false), 500);
+    const productId = Number(routeId);
+    let pollingInterval = null;
+    
+    // Catalog service runs on port 3002, not 8080 (gateway)
+    const catalogServicePort = import.meta.env.VITE_CATALOG_SERVICE_PORT || '3002';
+    const apiUrl = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
+    const wsHost = apiUrl.replace(/^https?:\/\//, '').split(':')[0] || 'localhost';
+    const socketUrl = `http://${wsHost}:${catalogServicePort}`;
+    
+    console.log('Connecting to WebSocket at:', socketUrl);
+    
+    // Connect to WebSocket (required feature)
+    socketRef.current = io(socketUrl, {
+      transports: ['polling', 'websocket'], // Try polling first, then websocket
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionAttempts: 5,
+      timeout: 5000,
+      autoConnect: true,
+      forceNew: false
+    });
+    
+    const socket = socketRef.current;
+    
+    // Join product room when connected
+    socket.on('connect', () => {
+      console.log('✅ WebSocket connected for real-time updates');
+      socket.emit('join-product', productId);
+      // Clear polling if WebSocket connects successfully
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+      }
+    });
+    
+    // Listen for review updates
+    socket.on('review-updated', (data) => {
+      console.log('Review updated via WebSocket:', data);
+      setAutoRefreshing(true);
+      loadReviews(productId).finally(() => {
+        setTimeout(() => setAutoRefreshing(false), 500);
+      });
+    });
+    
+    socket.on('disconnect', () => {
+      console.log('WebSocket disconnected');
+      // Start polling fallback when disconnected
+      if (!pollingInterval) {
+        pollingInterval = setInterval(() => {
+          loadReviews(productId).catch(() => {
+            // Silently fail
+          });
+        }, 10000); // Poll every 10 seconds when WebSocket is down
+      }
+    });
+    
+    socket.on('connect_error', (error) => {
+      // Log error but don't spam console
+      console.warn('WebSocket connection error (will retry):', error.message);
+      // Start polling fallback immediately
+      if (!pollingInterval) {
+        pollingInterval = setInterval(() => {
+          loadReviews(productId).catch(() => {
+            // Silently fail
+          });
+        }, 10000); // Poll every 10 seconds as fallback
+      }
+    });
+    
+    // Start polling as initial fallback (will be cleared if WebSocket connects)
+    pollingInterval = setInterval(() => {
+      if (!socket.connected) {
+        loadReviews(productId).catch(() => {
+          // Silently fail
         });
+      } else {
+        // WebSocket is connected, clear polling
+        clearInterval(pollingInterval);
+        pollingInterval = null;
       }
     }, 10000);
     
-    return () => clearInterval(interval);
+    return () => {
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+      }
+      if (socket && socket.connected) {
+        socket.emit('leave-product', productId);
+        socket.disconnect();
+      }
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+    };
   }, [routeId]);
 
   // Scroll to top when product changes
@@ -265,6 +388,45 @@ const ProductDetail = () => {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewsPage, reviewsFilter]);
+
+  // Handle guest comment submission (no login required, no rating)
+  const handleSubmitGuestComment = async () => {
+    if (!userComment.trim()) {
+      toast.show('Vui lòng nhập bình luận', { type: 'error' });
+      return;
+    }
+
+    setSubmittingGuestComment(true);
+    try {
+      const apiUrl = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
+      const res = await fetch(`${apiUrl}/catalog/products/${routeId}/guest-comments`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          comment: userComment.trim(),
+          guestName: guestName.trim() || null
+        })
+      });
+
+      if (res.ok) {
+        toast.show('Bình luận của bạn đã được gửi!', { type: 'success' });
+        setUserComment('');
+        setGuestName('');
+        setReviewsPage(1);
+        await loadReviews(Number(routeId));
+      } else {
+        const errData = await res.json();
+        toast.show(errData.error || 'Không thể gửi bình luận', { type: 'error' });
+      }
+    } catch (err) {
+      console.error('Submit guest comment error:', err);
+      toast.show('Lỗi khi gửi bình luận', { type: 'error' });
+    } finally {
+      setSubmittingGuestComment(false);
+    }
+  };
 
   const handleSubmitReview = async () => {
     // Debug: Log ra giá trị để kiểm tra
@@ -376,12 +538,26 @@ const ProductDetail = () => {
   const handleAddToCart = async () => {
     if (!product) return;
     
+    // Check if variant is required but not selected
+    if (variants.length > 0 && !selectedVariant) {
+      toast.show('Vui lòng chọn phiên bản sản phẩm', { type: 'error' });
+      return;
+    }
+    
+    const priceCents = selectedVariant ? selectedVariant.price_cents : (product.price_cents || product.originalPrice || product.price);
+    const variantId = selectedVariant ? selectedVariant.id : null;
+    
     // Đã đăng nhập: thêm vào giỏ hàng của user
     if (token) {
       try {
         setError('');
         setLoading(true);
-        await addItemToCart(api, { productId: product.id, quantity, priceCents: product.price_cents || product.price });
+        await addItemToCart(api, { 
+          productId: product.id, 
+          variantId: variantId,
+          quantity, 
+          priceCents: priceCents 
+        });
         await refreshCart();
         toast.show('✓ Đã thêm vào giỏ hàng', { type: 'success' });
       } catch (e) {
@@ -400,8 +576,9 @@ const ProductDetail = () => {
       const { guestCartId: newGuestCartId, items } = await addGuestItemToCart({
         guestCartId,
         productId: product.id,
+        variantId: variantId,
         quantity,
-        priceCents: product.price_cents || product.price
+        priceCents: priceCents
       });
       sessionStorage.setItem('guestCartId', newGuestCartId);
       sessionStorage.setItem('guestCartItems', JSON.stringify(items));
@@ -418,12 +595,26 @@ const ProductDetail = () => {
   const handleBuyNow = async () => {
     if (!product) return;
 
+    // Check if variant is required but not selected
+    if (variants.length > 0 && !selectedVariant) {
+      toast.show('Vui lòng chọn phiên bản sản phẩm', { type: 'error' });
+      return;
+    }
+
+    const priceCents = selectedVariant ? selectedVariant.price_cents : (product.price_cents || product.originalPrice || product.price);
+    const variantId = selectedVariant ? selectedVariant.id : null;
+
     // Đã đăng nhập: hành vi cũ - thêm vào giỏ và chuyển sang trang giỏ hàng
     if (token) {
       try {
         setError('');
         setLoading(true);
-        await addItemToCart(api, { productId: product.id, quantity, priceCents: product.price_cents || product.price });
+        await addItemToCart(api, { 
+          productId: product.id, 
+          variantId: variantId,
+          quantity, 
+          priceCents: priceCents 
+        });
         await refreshCart();
         navigate('/cart');
       } catch (e) {
@@ -436,12 +627,12 @@ const ProductDetail = () => {
     // Khách chưa đăng nhập: chuyển thẳng tới trang thanh toán với thông tin sản phẩm
     try {
       setError('');
-      const priceCents = product.originalPrice || product.price_cents || product.price;
       navigate('/checkout', {
         state: {
           guestItems: [
             {
               productId: product.id,
+              variantId: variantId,
               quantity,
               priceCents
             }
@@ -484,9 +675,22 @@ const ProductDetail = () => {
         {/* Breadcrumb */}
         <nav className="mb-8">
           <ol className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-400">
-            <li><a href="/" className="hover:text-primary">Trang chủ</a></li>
-            <li className="text-gray-400">/</li>
-            <li><a href="/collections/laptop" className="hover:text-primary">Laptop</a></li>
+            <li>
+              <Link to="/" className="hover:text-primary">Trang chủ</Link>
+            </li>
+            {productCategory && (
+              <>
+                <li className="text-gray-400">/</li>
+                <li>
+                  <Link 
+                    to={`/products?categoryId=${productCategory.id}`} 
+                    className="hover:text-primary"
+                  >
+                    {productCategory.name}
+                  </Link>
+                </li>
+              </>
+            )}
             <li className="text-gray-400">/</li>
             <li className="text-gray-900 dark:text-white">{product.name}</li>
           </ol>
@@ -587,6 +791,88 @@ const ProductDetail = () => {
             <p className="text-gray-600 dark:text-gray-400 text-lg leading-relaxed">
               {product.description}
             </p>
+
+            {/* Variants Selector */}
+            {variants.length > 0 && (
+              <div className="space-y-3">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  Chọn phiên bản:
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {variants.map((variant) => {
+                    const variantDiscount = variant.discount_percent || 0;
+                    const variantFinalPrice = Math.round(variant.price_cents * (100 - variantDiscount) / 100);
+                    const isSelected = selectedVariant && selectedVariant.id === variant.id;
+                    const isOutOfStock = (variant.stock || 0) === 0;
+                    
+                    return (
+                      <button
+                        key={variant.id}
+                        onClick={() => {
+                          setSelectedVariant(variant);
+                          // Update product price and stock
+                          setProduct(prev => ({
+                            ...prev,
+                            price: variantFinalPrice,
+                            originalPrice: variant.price_cents,
+                            discount: variantDiscount
+                          }));
+                          setAvailableStock(variant.stock || 0);
+                        }}
+                        disabled={isOutOfStock}
+                        className={`p-4 rounded-lg border-2 transition-all text-left ${
+                          isSelected
+                            ? 'border-primary bg-primary/5 dark:bg-primary/10'
+                            : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                        } ${isOutOfStock ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="font-semibold text-gray-900 dark:text-white mb-1">
+                              {variant.name}
+                            </div>
+                            {variant.attributes && typeof variant.attributes === 'object' && !Array.isArray(variant.attributes) && (
+                              <div className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
+                                {Object.entries(variant.attributes)
+                                  .filter(([key, value]) => {
+                                    // Only show primitive values (string, number, boolean)
+                                    return value !== null && typeof value !== 'object' && !Array.isArray(value);
+                                  })
+                                  .map(([key, value]) => (
+                                    <div key={key}>
+                                      <span className="capitalize">{key}:</span> {String(value)}
+                                    </div>
+                                  ))}
+                              </div>
+                            )}
+                            <div className="mt-2 flex items-center gap-2">
+                              <span className="text-lg font-bold text-primary">
+                                {variantFinalPrice.toLocaleString('vi-VN')} ₫
+                              </span>
+                              {variantDiscount > 0 && (
+                                <span className="text-sm text-gray-500 line-through">
+                                  {variant.price_cents.toLocaleString('vi-VN')} ₫
+                                </span>
+                              )}
+                            </div>
+                            <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                              {isOutOfStock ? 'Hết hàng' : `Còn ${variant.stock} sản phẩm`}
+                            </div>
+                          </div>
+                          {isSelected && (
+                            <div className="ml-2 text-primary">
+                              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                              </svg>
+                            </div>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Price */}
             <div className="space-y-2">
@@ -901,36 +1187,79 @@ const ProductDetail = () => {
             </div>
           </div>
 
-          {/* Submit Review Form */}
-          {token && user && user.id ? (
-            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-8 mb-8">
-              <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">
-                Gửi đánh giá của bạn
-              </h3>
-              
-              {/* Star Rating Input */}
-              <div className="flex gap-2 mb-4">
-                {[1, 2, 3, 4, 5].map((star) => (
-                  <button
-                    key={star}
-                    type="button"
-                    onClick={() => setUserRating(star)}
-                    className="focus:outline-none transition-transform hover:scale-110"
-                  >
-                    {star <= userRating ? (
-                      <FaStar className="text-yellow-400" size={32} />
-                    ) : (
-                      <FaRegStar className="text-gray-300 dark:text-gray-600" size={32} />
-                    )}
-                  </button>
-                ))}
+          {/* Submit Review/Comment Form */}
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-8 mb-8">
+            <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">
+              {token && user && user.id ? 'Gửi đánh giá của bạn' : 'Gửi bình luận của bạn'}
+            </h3>
+            
+            {/* Star Rating Input - Only for logged-in users */}
+            {token && user && user.id ? (
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Đánh giá sao (bắt buộc)
+                </label>
+                <div className="flex gap-2">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      type="button"
+                      onClick={() => setUserRating(star)}
+                      className="focus:outline-none transition-transform hover:scale-110"
+                    >
+                      {star <= userRating ? (
+                        <FaStar className="text-yellow-400" size={32} />
+                      ) : (
+                        <FaRegStar className="text-gray-300 dark:text-gray-600" size={32} />
+                      )}
+                    </button>
+                  ))}
+                </div>
               </div>
+            ) : (
+              <div className="mb-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+                <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                  ⭐ Để đánh giá bằng sao, vui lòng{' '}
+                  <button
+                    onClick={() => {
+                      localStorage.setItem('returnUrl', window.location.pathname);
+                      navigate('/login');
+                    }}
+                    className="underline font-medium hover:text-yellow-900 dark:hover:text-yellow-100"
+                  >
+                    đăng nhập
+                  </button>
+                </p>
+              </div>
+            )}
 
-              {/* Comment Input */}
+            {/* Guest Name Input - Only for non-logged-in users */}
+            {!token || !user || !user.id ? (
+              <div className="mb-4">
+                <input
+                  type="text"
+                  value={guestName}
+                  onChange={(e) => setGuestName(e.target.value)}
+                  placeholder="Tên của bạn (tùy chọn)"
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg 
+                           bg-white dark:bg-gray-700 text-gray-900 dark:text-white
+                           focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                           placeholder-gray-400 dark:placeholder-gray-500"
+                />
+              </div>
+            ) : null}
+
+            {/* Comment Input */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Bình luận {token && user && user.id ? '(tùy chọn)' : '(bắt buộc)'}
+              </label>
               <textarea
                 value={userComment}
                 onChange={(e) => setUserComment(e.target.value)}
-                placeholder="Nhập bình luận của bạn (không bắt buộc)"
+                placeholder={token && user && user.id 
+                  ? "Nhập bình luận của bạn (tùy chọn)" 
+                  : "Nhập bình luận của bạn"}
                 className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg 
                          bg-white dark:bg-gray-700 text-gray-900 dark:text-white
                          focus:ring-2 focus:ring-blue-500 focus:border-transparent
@@ -938,35 +1267,31 @@ const ProductDetail = () => {
                          resize-none"
                 rows={4}
               />
+            </div>
 
-              {/* Submit Button */}
+            {/* Submit Button */}
+            {token && user && user.id ? (
               <button
                 onClick={handleSubmitReview}
                 disabled={submittingReview || userRating === 0}
-                className="mt-4 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg
+                className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg
                          disabled:opacity-50 disabled:cursor-not-allowed
                          transition-colors font-medium"
               >
                 {submittingReview ? 'Đang gửi...' : 'Gửi đánh giá'}
               </button>
-            </div>
-          ) : (
-            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-8 mb-8 text-center">
-              <p className="text-gray-600 dark:text-gray-400 mb-4">
-                Vui lòng đăng nhập để đánh giá sản phẩm
-              </p>
+            ) : (
               <button
-                onClick={() => {
-                  localStorage.setItem('returnUrl', window.location.pathname);
-                  navigate('/login');
-                }}
+                onClick={handleSubmitGuestComment}
+                disabled={submittingGuestComment || !userComment.trim()}
                 className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg
+                         disabled:opacity-50 disabled:cursor-not-allowed
                          transition-colors font-medium"
               >
-                Đăng nhập
+                {submittingGuestComment ? 'Đang gửi...' : 'Gửi bình luận'}
               </button>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* Reviews Filter */}
           <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6 mb-6">
@@ -1146,6 +1471,40 @@ const ProductDetail = () => {
               ))
             )}
           </div>
+
+          {/* Guest Comments Section */}
+          {guestComments.length > 0 && (
+            <div className="mt-8">
+              <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">
+                Bình luận từ khách (không có đánh giá sao)
+              </h3>
+              <div className="space-y-4">
+                {guestComments.map((comment) => (
+                  <div key={comment.id} className="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-4 border border-gray-200 dark:border-gray-600">
+                    <div className="flex items-start justify-between mb-2">
+                      <div>
+                        <p className="font-medium text-gray-900 dark:text-white">
+                          {comment.guest_name || 'Khách'}
+                        </p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          {new Date(comment.created_at).toLocaleDateString('vi-VN', {
+                            year: 'numeric',
+                            month: 'long',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </p>
+                      </div>
+                    </div>
+                    <p className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
+                      {comment.comment}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Pagination */}
           {(reviewsStats.filtered || reviewsStats.total) > reviewsPerPage && (

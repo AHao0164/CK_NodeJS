@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
   is_verified TINYINT(1) DEFAULT 0,
   oauth_provider VARCHAR(50) DEFAULT NULL,
   oauth_id VARCHAR(255) DEFAULT NULL,
+  loyalty_points INT DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX idx_email (email),
@@ -94,6 +95,21 @@ CREATE TABLE IF NOT EXISTS terms_policies (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Loyalty points history
+CREATE TABLE IF NOT EXISTS loyalty_points_history (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  order_id BIGINT,
+  points INT NOT NULL,
+  type ENUM('EARNED','USED','EXPIRED') NOT NULL,
+  description TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_user_id (user_id),
+  INDEX idx_order_id (order_id),
+  INDEX idx_created (created_at)
+);
+
 -- Seed: Default admin user (email: tenho051512@gmail.com, password: admin123456)
 -- Bcrypt hash for 'admin123456'
 INSERT INTO users (email, password_hash, full_name, role, is_verified) 
@@ -171,11 +187,37 @@ CREATE TABLE IF NOT EXISTS product_images (
   INDEX idx_sort (product_id, sort_order)
 );
 
--- Inventory table
+-- Inventory table (for products without variants)
 CREATE TABLE IF NOT EXISTS inventory (
   product_id BIGINT PRIMARY KEY,
   stock INT NOT NULL DEFAULT 0,
   FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+  INDEX idx_stock (stock)
+);
+
+-- Product variants table
+CREATE TABLE IF NOT EXISTS product_variants (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  product_id BIGINT NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  sku VARCHAR(100),
+  price_cents INT NOT NULL,
+  discount_percent INT DEFAULT 0,
+  image_url VARCHAR(512),
+  attributes JSON, -- e.g., {"color": "Black", "size": "256GB", "ram": "16GB"}
+  display_order INT DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+  INDEX idx_product (product_id),
+  INDEX idx_sku (sku),
+  INDEX idx_display_order (product_id, display_order)
+);
+
+-- Variant inventory table (independent stock tracking per variant)
+CREATE TABLE IF NOT EXISTS variant_inventory (
+  variant_id BIGINT PRIMARY KEY,
+  stock INT NOT NULL DEFAULT 0,
+  FOREIGN KEY (variant_id) REFERENCES product_variants(id) ON DELETE CASCADE,
   INDEX idx_stock (stock)
 );
 

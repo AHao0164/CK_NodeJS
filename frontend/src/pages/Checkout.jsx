@@ -5,6 +5,7 @@ import Button from '../components/ui/Button'
 import { Card, CardBody } from '../components/ui/Card'
 import { fetchCart } from '../services/cart'
 import { checkoutOrder, payForOrder, validateCoupon } from '../services/orders'
+import { publicApi } from '../api/client'
 import { motion } from 'framer-motion'
 import { useToast } from '../ui/Toast'
 import VI from '../constants/vi'
@@ -36,6 +37,8 @@ export default function Checkout() {
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [loyaltyPoints, setLoyaltyPoints] = useState(0)
+  const [pointsToUse, setPointsToUse] = useState(0)
   
   useEffect(() => {
     document.title = 'Thanh toán - GearUp';
@@ -47,14 +50,16 @@ export default function Checkout() {
 
     const loadForAuthenticatedUser = async () => {
       try {
-        const [cartData, productsData, userData] = await Promise.all([
+        const [cartData, productsData, userData, pointsData] = await Promise.all([
           fetchCart(api),
           fetch(`${import.meta.env.VITE_API_BASE || 'http://localhost:8080'}/catalog/products`).then(r => r.json()),
-          getCurrentUser(api)
+          getCurrentUser(api),
+          api.get('/auth/loyalty-points').then(r => r.data).catch(() => ({ points: 0 }))
         ])
         if (ignore) return
         setCart(cartData)
         setCatalog(Array.isArray(productsData?.items) ? productsData.items : [])
+        setLoyaltyPoints(pointsData?.points || 0)
         
         // Pre-fill shipping info from fresh user data
         if (userData) {
@@ -77,17 +82,42 @@ export default function Checkout() {
 
     const loadForGuest = async () => {
       try {
-        const guestItems = Array.isArray(location.state?.guestItems) ? location.state.guestItems : []
-        // Map guest items sang cấu trúc giống cart.items (product_id, quantity, id tạm)
-        const mapped = guestItems.map((it, idx) => ({
-          id: idx + 1,
-          product_id: it.productId,
-          quantity: it.quantity,
-          priceCents: it.priceCents
-        }))
+        // Priority 1: Load from location.state?.selectedItems (from Cart page - already selected)
+        // Priority 2: Load from location.state?.guestItems (from Buy Now)
+        // Priority 3: Load from sessionStorage (fallback)
+        let mapped = []
+        
+        if (Array.isArray(location.state?.selectedItems) && location.state.selectedItems.length > 0) {
+          // From Cart page - use selectedItems directly (already filtered and mapped)
+          mapped = location.state.selectedItems.map(it => ({
+            id: it.id,
+            product_id: it.product_id,
+            quantity: it.quantity,
+            price_cents: it.price_cents
+          }))
+        } else if (Array.isArray(location.state?.guestItems) && location.state.guestItems.length > 0) {
+          // From Buy Now - use guestItems directly
+          mapped = location.state.guestItems.map((it, idx) => ({
+            id: it.id || idx + 1,
+            product_id: it.productId || it.product_id,
+            quantity: it.quantity || 1,
+            price_cents: it.priceCents || it.price_cents
+          }))
+        } else {
+          // Fallback: Load from sessionStorage
+          const storedGuestCartItems = JSON.parse(sessionStorage.getItem('guestCartItems') || '[]')
+          mapped = storedGuestCartItems.map((item, idx) => ({
+            id: item.id || idx + 1,
+            product_id: item.product_id || item.productId,
+            quantity: item.quantity || 1,
+            price_cents: item.price_cents || item.priceCents
+          }))
+        }
+        
         if (!ignore) {
           setCart({ items: mapped })
         }
+        
         // Load catalog công khai để hiển thị thông tin sản phẩm
         const productsData = await fetch(`${import.meta.env.VITE_API_BASE || 'http://localhost:8080'}/catalog/products`).then(r => r.json())
         if (!ignore) {
@@ -113,9 +143,13 @@ export default function Checkout() {
   function detailsOf(id) { return catalog.find(x => x.id === id) }
   
   // Filter cart items to only include selected ones
-  const selectedCartItems = selectedItemIds.length > 0 
-    ? cart.items.filter(it => selectedItemIds.includes(it.id))
-    : cart.items; // Fallback to all items if no selection (backward compatibility)
+  // If we loaded from location.state?.selectedItems, items are already filtered
+  // Otherwise, filter by selectedItemIds if provided
+  const selectedCartItems = (Array.isArray(location.state?.selectedItems) && location.state.selectedItems.length > 0)
+    ? cart.items // Already filtered from selectedItems
+    : (selectedItemIds.length > 0 
+      ? cart.items.filter(it => selectedItemIds.includes(it.id))
+      : cart.items); // Fallback to all items if no selection (backward compatibility)
   
   const subtotal = selectedCartItems.reduce((s, it) => {
     const p = detailsOf(it.product_id)
@@ -125,17 +159,53 @@ export default function Checkout() {
     return s + finalPrice * it.quantity
   }, 0)
 
+  // Calculate tax (VAT 10%)
+  const tax = Math.round(subtotal * 0.1)
+
   const shippingFee = calculateShippingFee(subtotal, shipping.city)
   const shippingInfo = getShippingInfo(subtotal, shipping.city)
   
   const discount = (() => {
     if (!coupon) return 0
-    if (coupon.type === 'percentage') return Math.floor(subtotal * (coupon.value / 100))
-    if (coupon.type === 'fixed') return Math.min(subtotal, coupon.value)
-    return 0
+    
+    // Backend stores coupon.value:
+    // - For percentage: value is the percentage number (e.g., 10 = 10%)
+    // - For fixed: value can be in two formats:
+    //   1. Old format (seed data): value = actual VND amount (e.g., 10000 = 10,000 VND)
+    //   2. New format (admin app): value = VND * 100 (e.g., admin enters 10,000 → DB stores 1,000,000)
+    // Frontend subtotal is in the same unit as price_cents (which is actually VND, not real cents)
+    let calculatedDiscount = 0
+    
+    if (coupon.type === 'percentage') {
+      // coupon.value is percentage (10 = 10%), calculate discount
+      calculatedDiscount = Math.floor(subtotal * (coupon.value / 100))
+    } else if (coupon.type === 'fixed') {
+      // FIX: Admin app multiplies value by 100 when saving fixed coupons
+      // Check if value is likely multiplied by 100 (large number and divisible by 100)
+      // Example: Admin enters 10,000 VND → saved as 1,000,000 → divide by 100 = 10,000
+      let fixedDiscountAmount = coupon.value
+      if (coupon.value >= 100000 && coupon.value % 100 === 0) {
+        // Likely multiplied by 100 by admin app, divide by 100 to get actual VND
+        fixedDiscountAmount = coupon.value / 100
+      }
+      calculatedDiscount = Math.min(subtotal, fixedDiscountAmount)
+    }
+    
+    console.log('Discount calculation:', { 
+      couponType: coupon.type, 
+      couponValue: coupon.value, 
+      subtotal, 
+      calculatedDiscount 
+    }) // Debug log
+    
+    return calculatedDiscount
   })()
   
-  const total = subtotal + shippingFee - discount
+  // Calculate points discount: 1 point = 1,000 VND
+  const pointsDiscount = pointsToUse * 1000
+  
+  // Calculate total after all discounts
+  const total = subtotal + tax + shippingFee - discount - pointsDiscount
 
   const handleClearInfo = (target) => {
     setDeleteTarget(target)
@@ -214,7 +284,9 @@ export default function Checkout() {
           ward: shipping.ward,
           address: shipping.address
         },
-        paymentMethod: 'VNPAY'
+        paymentMethod: 'VNPAY',
+        couponCode: coupon?.code || null,
+        pointsToUse: pointsToUse > 0 ? pointsToUse : null
       }
 
       const { data: orderData } = await api.post('/orders/checkout', orderPayload)
@@ -330,7 +402,9 @@ export default function Checkout() {
           ward: shipping.ward,
           address: shipping.address
         },
-        paymentMethod: 'COD'
+        paymentMethod: 'COD',
+        couponCode: coupon?.code || null,
+        pointsToUse: pointsToUse > 0 ? pointsToUse : null
       }
 
       const { data } = await api.post('/orders/checkout', orderPayload)
@@ -417,14 +491,26 @@ export default function Checkout() {
 
   async function applyCoupon() {
     if (!couponCode) return
+    
+    // Validate format: 5-character alphanumeric
+    if (!/^[A-Z0-9]{5}$/.test(couponCode)) {
+      setCoupon(null)
+      setError('Mã giảm giá phải có đúng 5 ký tự chữ và số')
+      return
+    }
+    
     try {
-      const data = await validateCoupon(api, couponCode)
+      // Use publicApi for guest users, api for authenticated users
+      const apiClient = token ? api : publicApi
+      const data = await validateCoupon(apiClient, couponCode)
+      console.log('Coupon data received:', data) // Debug log
       setCoupon(data)
       setError('') // Clear previous error message
       toast.show('✓ Áp dụng mã giảm giá thành công', { type: 'success' })
-    } catch (_) {
+    } catch (e) {
       setCoupon(null)
-      setError('Mã giảm giá không hợp lệ hoặc đã hết hạn')
+      const errorMsg = e?.response?.data?.message || e?.response?.data?.error || 'Mã giảm giá không hợp lệ hoặc đã hết hạn'
+      setError(errorMsg)
     }
   }
   
@@ -536,6 +622,10 @@ export default function Checkout() {
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between"><span>Tạm tính</span><span>{subtotal.toLocaleString('vi-VN')} ₫</span></div>
                 <div className="flex justify-between">
+                  <span>Thuế VAT (10%)</span>
+                  <span>{tax.toLocaleString('vi-VN')} ₫</span>
+                </div>
+                <div className="flex justify-between">
                   <span>Phí vận chuyển</span>
                   <span className={shippingFee === 0 ? 'text-emerald-600 font-medium' : ''}>
                     {shippingFee === 0 ? 'Miễn phí' : `${shippingFee.toLocaleString('vi-VN')} ₫`}
@@ -555,10 +645,83 @@ export default function Checkout() {
                     <span>-{discount.toLocaleString('vi-VN')} ₫</span>
                   </div>
                 )}
+                {pointsDiscount > 0 && (
+                  <div className="flex justify-between text-emerald-700">
+                    <span>Điểm thưởng ({pointsToUse} điểm)</span>
+                    <span>-{pointsDiscount.toLocaleString('vi-VN')} ₫</span>
+                  </div>
+                )}
                 <div className="flex justify-between font-semibold text-base pt-2 border-t"><span>Tổng cộng</span><span className="text-primary">{total.toLocaleString('vi-VN')} ₫</span></div>
               </div>
+              {token && loyaltyPoints > 0 && (
+                <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <svg className="w-5 h-5 text-blue-600 dark:text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M8.433 7.418c.155-.103.346-.196.567-.267v1.698a2.305 2.305 0 01-.567-.267C8.07 8.34 8 8.114 8 8c0-.114.07-.34.433-.582zM11 12.849v-1.698c.22.071.412.164.567.267.364.243.433.468.433.582 0 .114-.07.34-.433.582a2.305 2.305 0 01-.567.267z" />
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-13a1 1 0 10-2 0v.092a4.535 4.535 0 00-1.676.662C6.602 6.234 6 7.009 6 8c0 .99.602 1.765 1.324 2.246.48.32 1.054.545 1.676.662v1.941a3.37 3.37 0 01-.448-.08 4.507 4.507 0 01-3.187-3.188C5.716 10.163 5 9.262 5 8c0-1.262.716-2.163 1.228-2.661a4.507 4.507 0 013.187-3.188A3.37 3.37 0 019 2V1a1 1 0 012 0v.092a4.535 4.535 0 001.676.662C13.398 2.766 14 3.991 14 5c0 .99-.602 1.765-1.324 2.246A4.535 4.535 0 0111 7.908v1.941a3.37 3.37 0 01.448.08 4.507 4.507 0 013.187 3.188C15.284 13.837 16 14.738 16 16c0 1.262-.716 2.163-1.228 2.661a4.507 4.507 0 01-3.187 3.188 3.37 3.37 0 01-.448.08V19a1 1 0 10-2 0v-.092a4.535 4.535 0 00-1.676-.662C6.602 17.234 6 16.009 6 15c0-.99.602-1.765 1.324-2.246A4.535 4.535 0 019 12.092v-1.941a3.37 3.37 0 01-.448-.08 4.507 4.507 0 01-3.187-3.188C4.716 6.163 4 5.262 4 4c0-1.262.716-2.163 1.228-2.661a4.507 4.507 0 013.187-3.188A3.37 3.37 0 019 1V0a1 1 0 012 0v.092a4.535 4.535 0 001.676.662C14.398 2.766 15 3.991 15 5c0 .99-.602 1.765-1.324 2.246A4.535 4.535 0 0113 7.908v1.941a3.37 3.37 0 01.448.08 4.507 4.507 0 013.187 3.188C17.284 13.837 18 14.738 18 16c0 1.262-.716 2.163-1.228 2.661a4.507 4.507 0 01-3.187 3.188 3.37 3.37 0 01-.448.08V19a1 1 0 102 0v-.092a4.535 4.535 0 001.676-.662C19.398 17.234 20 16.009 20 15c0-.99-.602-1.765-1.324-2.246A4.535 4.535 0 0117 12.092v-1.941a3.37 3.37 0 01.448-.08 4.507 4.507 0 013.187-3.188C21.284 6.163 22 5.262 22 4c0-1.262-.716-2.163-1.228-2.661z" clipRule="evenodd" />
+                      </svg>
+                      <span className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                        Điểm thưởng: {loyaltyPoints.toLocaleString('vi-VN')} điểm
+                      </span>
+                    </div>
+                    <span className="text-xs text-blue-600 dark:text-blue-400">1 điểm = 1,000₫</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <input 
+                      type="number"
+                      min="0"
+                      max={Math.min(loyaltyPoints, Math.floor(total / 1000))}
+                      className="h-9 flex-1 rounded-lg border border-blue-300 dark:border-blue-700 px-3 text-sm dark:bg-slate-800" 
+                      placeholder="Số điểm muốn dùng" 
+                      value={pointsToUse || ''} 
+                      onChange={e => {
+                        const value = parseInt(e.target.value) || 0;
+                        // Max points = min of (available points, order total before points discount / 1000)
+                        const orderTotalBeforePoints = subtotal + tax + shippingFee - discount;
+                        const maxPoints = Math.min(loyaltyPoints, Math.floor(orderTotalBeforePoints / 1000));
+                        setPointsToUse(Math.max(0, Math.min(value, maxPoints)));
+                      }}
+                    />
+                    <Button 
+                      onClick={() => {
+                        const orderTotalBeforePoints = subtotal + tax + shippingFee - discount;
+                        const maxPoints = Math.min(loyaltyPoints, Math.floor(orderTotalBeforePoints / 1000));
+                        setPointsToUse(maxPoints);
+                      }}
+                      variant="outline"
+                      className="text-xs"
+                    >
+                      Dùng tối đa
+                    </Button>
+                    {pointsToUse > 0 && (
+                      <Button 
+                        onClick={() => setPointsToUse(0)}
+                        variant="outline"
+                        className="text-xs"
+                      >
+                        Hủy
+                      </Button>
+                    )}
+                  </div>
+                  {pointsToUse > 0 && (
+                    <div className="mt-2 text-xs text-emerald-700 dark:text-emerald-400">
+                      Giảm: {pointsDiscount.toLocaleString('vi-VN')}₫
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="mt-3 flex gap-2">
-                <input className="h-11 flex-1 rounded-lg border border-slate-300 px-3 text-sm dark:bg-slate-800 dark:border-slate-700" placeholder="Mã giảm giá" value={couponCode} onChange={e=>setCouponCode(e.target.value.toUpperCase())} />
+                <input 
+                  className="h-11 flex-1 rounded-lg border border-slate-300 px-3 text-sm dark:bg-slate-800 dark:border-slate-700" 
+                  placeholder="Mã giảm giá (5 ký tự)" 
+                  value={couponCode} 
+                  onChange={e=>{
+                    const value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5);
+                    setCouponCode(value);
+                  }} 
+                  maxLength={5}
+                />
                 <Button onClick={applyCoupon} variant="outline">Áp dụng</Button>
               </div>
               {error && <div className="mt-2 text-center text-xs text-red-600">{error}</div>}

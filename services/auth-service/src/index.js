@@ -204,7 +204,9 @@ if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
             'INSERT INTO users (email, full_name, oauth_provider, oauth_id, password_hash) VALUES (?, ?, ?, ?, ?)',
             [email, fullName, oauthProvider, oauthId, ''] // password_hash rỗng cho OAuth users
           );
-          user = { id: result.insertId, email, full_name: fullName };
+          // Fetch lại user từ database để có đầy đủ thông tin (bao gồm role)
+          const [newUsers] = await pool.query('SELECT * FROM users WHERE id = ?', [result.insertId]);
+          user = newUsers[0];
         }
       }
 
@@ -257,7 +259,9 @@ if (FACEBOOK_APP_ID && FACEBOOK_APP_SECRET) {
             'INSERT INTO users (email, full_name, oauth_provider, oauth_id, password_hash) VALUES (?, ?, ?, ?, ?)',
             [email, fullName, oauthProvider, oauthId, '']
           );
-          user = { id: result.insertId, email, full_name: fullName };
+          // Fetch lại user từ database để có đầy đủ thông tin (bao gồm role)
+          const [newUsers] = await pool.query('SELECT * FROM users WHERE id = ?', [result.insertId]);
+          user = newUsers[0];
         }
       }
 
@@ -2002,6 +2006,595 @@ app.post('/auth/reset-password', async (req, res) => {
   }
 });
 
+// Send order confirmation email
+app.post('/auth/send-order-confirmation', async (req, res) => {
+  try {
+    const { orderId, email, orderData } = req.body;
+    
+    if (!orderId || !email || !orderData) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Format order data - All values are in VND (not cents)
+    // Note: Database columns are named *_cents but actually store VND values
+    // This is a legacy naming issue - the values are already in VND format
+    
+    const orderTotal = orderData.total_cents || 0; // Already in VND
+    const shippingFee = orderData.shipping_fee_cents || 0; // Already in VND
+    const discount = orderData.discount_cents || 0; // Already in VND
+    
+    // Get items and calculate subtotal from items (all in VND)
+    const items = orderData.items || [];
+    const calculatedSubtotal = items.reduce((sum, item) => {
+      return sum + (item.subtotal_cents || 0); // Already in VND
+    }, 0);
+    
+    // Use calculated subtotal from items
+    const subtotal = calculatedSubtotal;
+    
+    // Use orderTotal from database as it's the source of truth
+    const finalTotal = orderTotal;
+    
+    const paymentMethod = orderData.payment_method || 'COD';
+    const paymentStatus = orderData.payment_status || 'PENDING';
+    const orderStatus = orderData.status || 'PENDING';
+    
+    // Format payment method name
+    const paymentMethodName = paymentMethod === 'VNPAY' ? 'VNPay' : 
+                              paymentMethod === 'COD' ? 'Thanh toán khi nhận hàng (COD)' : 
+                              paymentMethod;
+    
+    // Format order status
+    const statusMap = {
+      'PENDING': 'Đang chờ xử lý',
+      'CONFIRMED': 'Đã xác nhận',
+      'SHIPPING': 'Đang giao hàng',
+      'DELIVERED': 'Đã giao hàng',
+      'CANCELLED': 'Đã hủy'
+    };
+    const statusName = statusMap[orderStatus] || orderStatus;
+    
+    // Format date
+    const orderDate = orderData.created_at ? new Date(orderData.created_at).toLocaleString('vi-VN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    }) : new Date().toLocaleString('vi-VN');
+    
+    // Build items HTML (all values are already in VND)
+    const itemsHtml = items.map(item => {
+      const itemPrice = (item.price_cents || 0).toLocaleString('vi-VN'); // Already in VND
+      const itemSubtotal = (item.subtotal_cents || 0).toLocaleString('vi-VN'); // Already in VND
+      return `
+        <tr style="border-bottom: 1px solid #e2e8f0;">
+          <td style="padding: 12px; text-align: left;">
+            <div style="font-weight: 600; color: #1e293b; margin-bottom: 4px;">${item.product_name || 'Sản phẩm'}</div>
+            <div style="font-size: 13px; color: #64748b;">Số lượng: ${item.quantity}</div>
+          </td>
+          <td style="padding: 12px; text-align: right; color: #475569;">${itemPrice}₫</td>
+          <td style="padding: 12px; text-align: right; font-weight: 600; color: #1e293b;">${itemSubtotal}₫</td>
+        </tr>
+      `;
+    }).join('');
+
+    // Send email
+    await transporter.sendMail({
+      from: `"GearUp - Laptop Store" <${process.env.SMTP_USER || 'noreply@gearup.vn'}>`,
+      to: email,
+      subject: `✅ Đơn hàng #${orderId} - ${statusName}`,
+      html: `
+        <!DOCTYPE html>
+        <html lang="vi">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { 
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+              line-height: 1.65; 
+              color: #2d3748;
+              background: #f7fafc;
+              padding: 24px 12px;
+            }
+            .email-wrapper { 
+              max-width: 650px; 
+              margin: 0 auto; 
+              background: white;
+              border-radius: 12px;
+              overflow: hidden;
+              box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            }
+            .header { 
+              background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+              padding: 36px 28px;
+              text-align: center;
+            }
+            .header h1 { 
+              color: white; 
+              font-size: 24px; 
+              font-weight: 600;
+              margin-bottom: 6px;
+            }
+            .header p { 
+              color: rgba(255, 255, 255, 0.95); 
+              font-size: 14px;
+              margin: 0;
+            }
+            .content { 
+              padding: 36px 28px;
+            }
+            .greeting { 
+              font-size: 15px; 
+              color: #2d3748;
+              margin-bottom: 20px;
+              line-height: 1.6;
+            }
+            .status-badge {
+              display: inline-block;
+              padding: 8px 16px;
+              border-radius: 20px;
+              font-size: 14px;
+              font-weight: 600;
+              margin-bottom: 24px;
+              background: ${orderStatus === 'CONFIRMED' ? '#d1fae5' : orderStatus === 'PENDING' ? '#fef3c7' : '#fee2e2'};
+              color: ${orderStatus === 'CONFIRMED' ? '#065f46' : orderStatus === 'PENDING' ? '#92400e' : '#991b1b'};
+            }
+            .order-info {
+              background: #f7fafc;
+              border-radius: 8px;
+              padding: 20px;
+              margin: 24px 0;
+            }
+            .info-row {
+              display: flex;
+              justify-content: space-between;
+              padding: 10px 0;
+              border-bottom: 1px solid #e2e8f0;
+            }
+            .info-row:last-child { border-bottom: none; }
+            .info-label { 
+              color: #718096; 
+              font-size: 14px;
+              font-weight: 500;
+            }
+            .info-value { 
+              color: #2d3748; 
+              font-size: 14px;
+              font-weight: 600;
+              text-align: right;
+            }
+            .items-table {
+              width: 100%;
+              border-collapse: collapse;
+              margin: 24px 0;
+              background: white;
+              border-radius: 8px;
+              overflow: hidden;
+              box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            }
+            .items-table thead {
+              background: #f7fafc;
+            }
+            .items-table th {
+              padding: 12px;
+              text-align: left;
+              font-weight: 600;
+              color: #475569;
+              font-size: 13px;
+              text-transform: uppercase;
+              letter-spacing: 0.5px;
+            }
+            .items-table th:last-child {
+              text-align: right;
+            }
+            .total-section {
+              background: #f7fafc;
+              border-radius: 8px;
+              padding: 20px;
+              margin: 24px 0;
+            }
+            .total-row {
+              display: flex;
+              justify-content: space-between;
+              padding: 8px 0;
+              font-size: 14px;
+            }
+            .total-row.final {
+              border-top: 2px solid #cbd5e1;
+              margin-top: 12px;
+              padding-top: 12px;
+              font-size: 18px;
+              font-weight: 700;
+              color: #1e293b;
+            }
+            .shipping-info {
+              background: #f0f9ff;
+              border-left: 4px solid #3b82f6;
+              border-radius: 6px;
+              padding: 18px 20px;
+              margin: 24px 0;
+            }
+            .shipping-info h3 {
+              color: #1e40af;
+              font-size: 15px;
+              font-weight: 600;
+              margin-bottom: 12px;
+            }
+            .shipping-info p {
+              color: #1e40af;
+              font-size: 14px;
+              line-height: 1.8;
+              margin: 4px 0;
+            }
+            .footer {
+              background: #f7fafc;
+              padding: 20px 28px;
+              text-align: center;
+              border-top: 1px solid #e2e8f0;
+            }
+            .footer p {
+              color: #718096;
+              font-size: 12px;
+              margin: 4px 0;
+            }
+            .cta-button {
+              display: inline-block;
+              background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+              color: white;
+              padding: 14px 28px;
+              border-radius: 8px;
+              text-decoration: none;
+              font-weight: 600;
+              margin: 24px 0;
+            }
+            @media only screen and (max-width: 600px) {
+              body { padding: 0; }
+              .email-wrapper { border-radius: 0; }
+              .header { padding: 28px 20px; }
+              .content { padding: 28px 20px; }
+              .info-row { flex-direction: column; }
+              .info-value { text-align: left; margin-top: 4px; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="email-wrapper">
+            <div class="header">
+              <h1>🎉 Đơn hàng của bạn</h1>
+              <p>Cảm ơn bạn đã đặt hàng tại GearUp</p>
+            </div>
+            
+            <div class="content">
+              <div class="greeting">
+                Xin chào <strong>${orderData.shipping_name || 'bạn'}</strong>,
+              </div>
+              
+              <div class="status-badge">
+                ${statusName}
+              </div>
+              
+              <p style="color: #4a5568; line-height: 1.7; margin-bottom: 24px;">
+                Cảm ơn bạn đã đặt hàng tại <strong style="color: #667eea;">GearUp</strong>. 
+                Chúng tôi đã nhận được đơn hàng của bạn và đang xử lý. Dưới đây là thông tin chi tiết đơn hàng:
+              </p>
+              
+              <div class="order-info">
+                <div class="info-row">
+                  <span class="info-label">Mã đơn hàng</span>
+                  <span class="info-value">#${orderId}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Ngày đặt hàng</span>
+                  <span class="info-value">${orderDate}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Phương thức thanh toán</span>
+                  <span class="info-value">${paymentMethodName}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Trạng thái thanh toán</span>
+                  <span class="info-value">${paymentStatus === 'PAID' ? 'Đã thanh toán' : 'Chưa thanh toán'}</span>
+                </div>
+              </div>
+
+              <h3 style="color: #1e293b; font-size: 16px; margin: 28px 0 16px 0;">📦 Sản phẩm đã đặt:</h3>
+              
+              <table class="items-table">
+                <thead>
+                  <tr>
+                    <th>Sản phẩm</th>
+                    <th style="text-align: right;">Đơn giá</th>
+                    <th style="text-align: right;">Thành tiền</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${itemsHtml}
+                </tbody>
+              </table>
+
+              <div class="total-section">
+                <div class="total-row">
+                  <span>Tạm tính:</span>
+                  <span>${subtotal.toLocaleString('vi-VN')}₫</span>
+                </div>
+                ${discount > 0 ? `
+                <div class="total-row" style="color: #059669;">
+                  <span>Giảm giá:</span>
+                  <span>-${discount.toLocaleString('vi-VN')}₫</span>
+                </div>
+                ` : ''}
+                ${shippingFee > 0 ? `
+                <div class="total-row">
+                  <span>Phí vận chuyển:</span>
+                  <span>${shippingFee.toLocaleString('vi-VN')}₫</span>
+                </div>
+                ` : discount > 0 && shippingFee === 0 ? `
+                <div class="total-row" style="color: #059669;">
+                  <span>Phí vận chuyển:</span>
+                  <span>Miễn phí (đã áp dụng mã giảm giá)</span>
+                </div>
+                ` : ''}
+                <div class="total-row final">
+                  <span>Tổng cộng:</span>
+                  <span>${finalTotal.toLocaleString('vi-VN')}₫</span>
+                </div>
+              </div>
+
+              <div class="shipping-info">
+                <h3>📍 Địa chỉ giao hàng:</h3>
+                <p><strong>${orderData.shipping_name || ''}</strong></p>
+                <p>📞 ${orderData.shipping_phone || ''}</p>
+                <p>✉️ ${orderData.shipping_email || ''}</p>
+                <p>${[orderData.shipping_address, orderData.shipping_ward, orderData.shipping_district, orderData.shipping_province].filter(Boolean).join(', ')}</p>
+              </div>
+
+              ${orderStatus === 'PENDING' && paymentMethod === 'COD' ? `
+              <div style="background: #fef3c7; border-left: 4px solid #f59e0b; border-radius: 6px; padding: 18px 20px; margin: 24px 0;">
+                <p style="color: #92400e; margin: 0; font-size: 14px;">
+                  <strong>⚠️ Lưu ý:</strong> Đơn hàng của bạn sẽ được xác nhận sau khi bạn nhập mã OTP. 
+                  Vui lòng kiểm tra email để nhận mã OTP xác nhận đơn hàng.
+                </p>
+              </div>
+              ` : ''}
+
+              <div style="text-align: center; margin: 32px 0;">
+                <a href="${FRONTEND_URL}/orders/${orderId}" class="cta-button">
+                  Xem chi tiết đơn hàng
+                </a>
+              </div>
+
+              <div style="background: #f7fafc; border-radius: 8px; padding: 18px 20px; margin: 24px 0;">
+                <p style="color: #475569; font-size: 13px; line-height: 1.7; margin: 0;">
+                  <strong>💡 Mẹo:</strong> Bạn có thể theo dõi trạng thái đơn hàng bất cứ lúc nào bằng cách đăng nhập vào tài khoản của mình hoặc sử dụng mã đơn hàng #${orderId}.
+                </p>
+              </div>
+            </div>
+            
+            <div class="footer">
+              <p><strong>GearUp - Laptop Store</strong></p>
+              <p>Email này được gửi tự động, vui lòng không trả lời</p>
+              <p style="margin-top: 8px;">© 2025 GearUp. All rights reserved.</p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `
+    });
+
+    return res.json({ ok: true, message: 'Order confirmation email sent' });
+  } catch (e) {
+    console.error('Send order confirmation email error:', e);
+    return res.status(500).json({ error: 'Failed to send email' });
+  }
+});
+
+// ============================================
+// LOYALTY POINTS ENDPOINTS
+// ============================================
+
+// Add loyalty points (called by order-service after order confirmation)
+app.post('/auth/add-loyalty-points', async (req, res) => {
+  try {
+    const { userId, orderId, points, description } = req.body;
+    
+    if (!userId || !points || points <= 0) {
+      return res.status(400).json({ error: 'Invalid request: userId and positive points required' });
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      // Get current points
+      const [[user]] = await conn.query('SELECT loyalty_points FROM users WHERE id = ?', [userId]);
+      if (!user) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const newPoints = (user.loyalty_points || 0) + points;
+
+      // Update user points
+      await conn.query(
+        'UPDATE users SET loyalty_points = ? WHERE id = ?',
+        [newPoints, userId]
+      );
+
+      // Record in history
+      await conn.query(
+        'INSERT INTO loyalty_points_history (user_id, order_id, points, type, description) VALUES (?, ?, ?, ?, ?)',
+        [userId, orderId || null, points, 'EARNED', description || `Tích lũy từ đơn hàng #${orderId || 'N/A'}`]
+      );
+
+      await conn.commit();
+      return res.json({ 
+        ok: true, 
+        points: newPoints,
+        pointsAdded: points
+      });
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  } catch (e) {
+    console.error('Add loyalty points error:', e);
+    return res.status(500).json({ error: 'Failed to add loyalty points' });
+  }
+});
+
+// Get user loyalty points
+app.get('/auth/loyalty-points', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'];
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const [[user]] = await pool.query(
+      'SELECT loyalty_points FROM users WHERE id = ?',
+      [userId]
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    return res.json({ 
+      points: user.loyalty_points || 0,
+      // 1 point = 1,000 VND
+      pointsValue: (user.loyalty_points || 0) * 1000
+    });
+  } catch (e) {
+    console.error('Get loyalty points error:', e);
+    return res.status(500).json({ error: 'Failed to get loyalty points' });
+  }
+});
+
+// Use loyalty points (deduct points and return discount amount)
+app.post('/auth/use-loyalty-points', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'];
+    const { pointsToUse, orderId } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    if (!pointsToUse || pointsToUse <= 0) {
+      return res.status(400).json({ error: 'Invalid points amount' });
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      // Get current points
+      const [[user]] = await conn.query(
+        'SELECT loyalty_points FROM users WHERE id = ? FOR UPDATE',
+        [userId]
+      );
+
+      if (!user) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const currentPoints = user.loyalty_points || 0;
+
+      if (currentPoints < pointsToUse) {
+        await conn.rollback();
+        return res.status(400).json({ 
+          error: 'Insufficient points',
+          available: currentPoints,
+          requested: pointsToUse
+        });
+      }
+
+      const newPoints = currentPoints - pointsToUse;
+      // 1 point = 1,000 VND discount
+      const discountAmount = pointsToUse * 1000;
+
+      // Update user points
+      await conn.query(
+        'UPDATE users SET loyalty_points = ? WHERE id = ?',
+        [newPoints, userId]
+      );
+
+      // Record in history
+      await conn.query(
+        'INSERT INTO loyalty_points_history (user_id, order_id, points, type, description) VALUES (?, ?, ?, ?, ?)',
+        [userId, orderId || null, -pointsToUse, 'USED', `Sử dụng ${pointsToUse} điểm cho đơn hàng #${orderId || 'N/A'}`]
+      );
+
+      await conn.commit();
+      return res.json({ 
+        ok: true,
+        pointsUsed: pointsToUse,
+        remainingPoints: newPoints,
+        discountAmount: discountAmount // In VND
+      });
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  } catch (e) {
+    console.error('Use loyalty points error:', e);
+    return res.status(500).json({ error: 'Failed to use loyalty points' });
+  }
+});
+
+// Get loyalty points history
+app.get('/auth/loyalty-points/history', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'];
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const [history] = await pool.query(
+      'SELECT * FROM loyalty_points_history WHERE user_id = ? ORDER BY created_at DESC LIMIT 50',
+      [userId]
+    );
+
+    return res.json({ history });
+  } catch (e) {
+    console.error('Get loyalty points history error:', e);
+    return res.status(500).json({ error: 'Failed to get history' });
+  }
+});
+
+// Update orderId in loyalty points history (called by order-service after order creation)
+app.post('/auth/update-points-history-order', async (req, res) => {
+  try {
+    const { userId, orderId } = req.body;
+    
+    if (!userId || !orderId) {
+      return res.status(400).json({ error: 'userId and orderId required' });
+    }
+
+    // Update the most recent USED entry for this user that doesn't have an orderId yet
+    const [result] = await pool.query(
+      `UPDATE loyalty_points_history 
+       SET order_id = ? 
+       WHERE user_id = ? AND type = 'USED' AND order_id IS NULL 
+       ORDER BY created_at DESC LIMIT 1`,
+      [orderId, userId]
+    );
+
+    return res.json({ ok: true, updated: result.affectedRows > 0 });
+  } catch (e) {
+    console.error('Update points history orderId error:', e);
+    return res.status(500).json({ error: 'Failed to update orderId' });
+  }
+});
+
 // Google OAuth routes
 app.get('/auth/google',
   passport.authenticate('google', { 
@@ -2048,8 +2641,9 @@ app.get('/auth/facebook/callback',
   }),
   (req, res) => {
     try {
+      // Tạo JWT token với format giống login thường và Google OAuth
       const token = jwt.sign(
-        { userId: req.user.id, email: req.user.email },
+        { sub: req.user.id, email: req.user.email, role: req.user.role || 'USER' },
         JWT_SECRET,
         { expiresIn: '7d' }
       );
@@ -2092,5 +2686,3 @@ app.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`Auth service listening on ${PORT}`);
 });
-
-

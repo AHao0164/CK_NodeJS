@@ -71,11 +71,37 @@ CREATE TABLE IF NOT EXISTS product_images (
   INDEX idx_sort (product_id, sort_order)
 );
 
--- Inventory table
+-- Inventory table (for products without variants)
 CREATE TABLE IF NOT EXISTS inventory (
   product_id BIGINT PRIMARY KEY,
   stock INT NOT NULL DEFAULT 0,
   FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+  INDEX idx_stock (stock)
+);
+
+-- Product variants table
+CREATE TABLE IF NOT EXISTS product_variants (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  product_id BIGINT NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  sku VARCHAR(100),
+  price_cents INT NOT NULL,
+  discount_percent INT DEFAULT 0,
+  image_url VARCHAR(512),
+  attributes JSON, -- e.g., {"color": "Black", "size": "256GB", "ram": "16GB"}
+  display_order INT DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+  INDEX idx_product (product_id),
+  INDEX idx_sku (sku),
+  INDEX idx_display_order (product_id, display_order)
+);
+
+-- Variant inventory table (independent stock tracking per variant)
+CREATE TABLE IF NOT EXISTS variant_inventory (
+  variant_id BIGINT PRIMARY KEY,
+  stock INT NOT NULL DEFAULT 0,
+  FOREIGN KEY (variant_id) REFERENCES product_variants(id) ON DELETE CASCADE,
   INDEX idx_stock (stock)
 );
 
@@ -129,6 +155,18 @@ CREATE TABLE IF NOT EXISTS review_comments (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (review_id) REFERENCES product_reviews(id) ON DELETE CASCADE,
   INDEX idx_review (review_id),
+  INDEX idx_created (created_at)
+);
+
+-- Guest comments table (comments from non-logged-in users, no rating)
+CREATE TABLE IF NOT EXISTS guest_comments (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  product_id BIGINT NOT NULL,
+  guest_name VARCHAR(255) NOT NULL,
+  comment TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+  INDEX idx_product (product_id),
   INDEX idx_created (created_at)
 );
 

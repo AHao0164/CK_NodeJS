@@ -35,6 +35,8 @@ export default function OrderDetail() {
   const [order, setOrder] = useState(null)
   const [loading, setLoading] = useState(true)
   const [cancelling, setCancelling] = useState(false)
+  const [statusHistory, setStatusHistory] = useState([])
+  const [loadingHistory, setLoadingHistory] = useState(false)
 
   useEffect(() => {
     document.title = `Chi tiết đơn hàng #${id} - GearUp`;
@@ -42,7 +44,13 @@ export default function OrderDetail() {
 
   useEffect(() => {
     setLoading(true)
-    api.get(`/orders/${id}`).then(r => setOrder(r.data)).finally(() => setLoading(false))
+    Promise.all([
+      api.get(`/orders/${id}`).then(r => r.data),
+      api.get(`/orders/${id}/status-history`).then(r => r.data).catch(() => [])
+    ]).then(([orderData, historyData]) => {
+      setOrder(orderData)
+      setStatusHistory(historyData)
+    }).finally(() => setLoading(false))
   }, [api, id])
 
   const handleCancelOrder = async () => {
@@ -143,6 +151,51 @@ export default function OrderDetail() {
               </div>
             </CardBody>
           </Card>
+
+          {/* Order Status History */}
+          {statusHistory.length > 0 && (
+            <Card>
+              <CardBody>
+                <div className="mb-4 text-lg font-semibold">Lịch sử trạng thái đơn hàng</div>
+                <div className="space-y-3">
+                  {statusHistory.map((history, idx) => (
+                    <div key={history.id} className="flex items-start gap-4 pb-3 border-b border-slate-200 dark:border-slate-700 last:border-0">
+                      <div className="flex-shrink-0 mt-1">
+                        <div className={`w-3 h-3 rounded-full ${idx === 0 ? 'bg-primary' : 'bg-slate-300 dark:bg-slate-600'}`}></div>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium border ${statusColors[history.new_status] || 'bg-slate-100 text-slate-700'}`}>
+                            {statusLabels[history.new_status] || history.new_status}
+                          </span>
+                          {history.old_status && (
+                            <>
+                              <span className="text-slate-400">←</span>
+                              <span className="text-xs text-slate-500 line-through">
+                                {statusLabels[history.old_status] || history.old_status}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                        {history.notes && (
+                          <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">{history.notes}</p>
+                        )}
+                        <div className="flex items-center gap-2 mt-2 text-xs text-slate-500">
+                          <span>{new Date(history.created_at).toLocaleString('vi-VN')}</span>
+                          {history.changed_by && history.changed_by !== 'SYSTEM' && (
+                            <>
+                              <span>•</span>
+                              <span>{history.changed_by.startsWith('ADMIN_') ? 'Quản trị viên' : history.changed_by.startsWith('USER_') ? 'Người dùng' : history.changed_by}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardBody>
+            </Card>
+          )}
 
           {/* Shipping Address */}
           <Card>

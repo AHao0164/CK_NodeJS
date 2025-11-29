@@ -76,6 +76,7 @@ export default function PromotionsPage() {
         active: form.active ? 1 : 0,
         startDate: formatForAPI(form.start_date),
         endDate: formatForAPI(form.end_date),
+        maxUsage: form.maxUsage || null,
       };
 
       if (form.id) {
@@ -246,7 +247,7 @@ export default function PromotionsPage() {
             variant="contained"
             startIcon={<Add />}
             onClick={() => {
-              setForm({ active: 1, type: 'percentage' });
+              setForm({ active: 1, type: 'percentage', maxUsage: null });
               setValueDisplay('');
               setOpen(true);
             }}
@@ -371,6 +372,7 @@ export default function PromotionsPage() {
                             active: promo.active,
                             start_date: formatDatetimeLocal(promo.start_date),
                             end_date: formatDatetimeLocal(promo.end_date),
+                            maxUsage: promo.max_usage || null,
                           });
                           setValueDisplay(val === '' ? '' : (promo.type === 'fixed' ? val.toLocaleString('vi-VN') : val.toString()));
                           setOpen(true);
@@ -396,6 +398,30 @@ export default function PromotionsPage() {
                   <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                     {getTypeLabel(promo.type, promo.value)}
                   </Typography>
+
+                  {/* Usage information */}
+                  {promo.max_usage !== null && promo.max_usage !== undefined && (
+                    <Box sx={{ mb: 1, p: 1, bgcolor: '#f3f4f6', borderRadius: 1 }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                        Số lần sử dụng: <strong>{promo.times_used || 0}</strong> / <strong>{promo.max_usage}</strong>
+                      </Typography>
+                      {promo.max_usage > 0 && (
+                        <Box sx={{ position: 'relative', width: '100%', height: 6, bgcolor: '#e5e7eb', borderRadius: 3, overflow: 'hidden' }}>
+                          <Box
+                            sx={{
+                              position: 'absolute',
+                              left: 0,
+                              top: 0,
+                              height: '100%',
+                              width: `${Math.min(100, ((promo.times_used || 0) / promo.max_usage) * 100)}%`,
+                              bgcolor: promo.times_used >= promo.max_usage ? '#ef4444' : '#10b981',
+                              transition: 'width 0.3s ease'
+                            }}
+                          />
+                        </Box>
+                      )}
+                    </Box>
+                  )}
 
                   <Typography variant="caption" color="text.secondary">
                     {promo.start_date && promo.end_date ? (
@@ -461,6 +487,20 @@ export default function PromotionsPage() {
                 helperText={form.type === 'percentage' ? 'VD: 15 = giảm 15%' : 'VD: 100,000 = giảm 100k₫'}
               />
             )}
+            <TextField
+              label="Số lần sử dụng tối đa"
+              type="number"
+              value={form.maxUsage || ''}
+              onChange={(e) => {
+                const val = e.target.value === '' ? null : parseInt(e.target.value);
+                if (val === null || (val >= 1 && val <= 10)) {
+                  setForm({ ...form, maxUsage: val });
+                }
+              }}
+              fullWidth
+              inputProps={{ min: 1, max: 10 }}
+              helperText="Từ 1 đến 10 lần. Để trống = không giới hạn"
+            />
             <Grid container spacing={2}>
               <Grid item xs={6}>
                 <TextField

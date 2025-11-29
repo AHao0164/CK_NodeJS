@@ -163,15 +163,29 @@ async function ensureSchema() {
     // Add created_at column if not exists (for existing databases)
     await ensureColumn('coupons', 'created_at', 'created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP');
     
+    // Add max_usage, times_used, max_usage_per_user columns if not exists
+    await ensureColumn('coupons', 'max_usage', 'max_usage INT DEFAULT NULL');
+    await ensureColumn('coupons', 'times_used', 'times_used INT DEFAULT 0');
+    await ensureColumn('coupons', 'max_usage_per_user', 'max_usage_per_user INT DEFAULT NULL');
+    
     // Alter existing DATE columns to DATETIME
     await conn.query(`ALTER TABLE coupons MODIFY COLUMN start_date DATETIME`).catch(() => {});
     await conn.query(`ALTER TABLE coupons MODIFY COLUMN end_date DATETIME`).catch(() => {});
 
-    // Seed a few coupons if missing
-    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, start_date, end_date) VALUES ('SUMMER10','percentage',10,1,NOW(), DATE_ADD(NOW(), INTERVAL 365 DAY))");
-    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, start_date, end_date) VALUES ('SALE100K','fixed',10000,1,NOW(), DATE_ADD(NOW(), INTERVAL 365 DAY))");
-    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, start_date, end_date) VALUES ('FREESHIP','freeship',0,1,NOW(), DATE_ADD(NOW(), INTERVAL 365 DAY))");
-    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, start_date, end_date) VALUES ('SUMMER2025','percentage',15,1,NOW(), DATE_ADD(NOW(), INTERVAL 365 DAY))");
+    // Delete old coupons with invalid format (not 5 characters)
+    await conn.query("DELETE FROM coupons WHERE code IN ('SUMMER10', 'SALE100K', 'FREESHIP', 'SUMMER2025')").catch(() => {});
+    
+    // Seed new coupons with correct 5-character alphanumeric format
+    // Format: 5 characters (A-Z, 0-9), max_usage: 1-10, no expiration date (NULL)
+    // Note: For 'fixed' type, value is stored as VND * 100 (to match admin app behavior)
+    // Example: 10,000 VND → stored as 1,000,000
+    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, start_date, end_date, max_usage, times_used) VALUES ('SUMMR','percentage',10,1,NULL,NULL,10,0)");
+    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, start_date, end_date, max_usage, times_used) VALUES ('SALE1','fixed',1000000,1,NULL,NULL,5,0)"); // 10,000 VND
+    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, start_date, end_date, max_usage, times_used) VALUES ('SHIP0','freeship',0,1,NULL,NULL,10,0)");
+    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, start_date, end_date, max_usage, times_used) VALUES ('NEW15','percentage',15,1,NULL,NULL,8,0)");
+    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, start_date, end_date, max_usage, times_used) VALUES ('WELCM','fixed',500000,1,NULL,NULL,10,0)"); // 5,000 VND
+    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, start_date, end_date, max_usage, times_used) VALUES ('VIP20','percentage',20,1,NULL,NULL,3,0)");
+    await conn.query("INSERT IGNORE INTO coupons (code, type, value, active, start_date, end_date, max_usage, times_used) VALUES ('FLASH','fixed',2000000,1,NULL,NULL,5,0)"); // 20,000 VND
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error('ensureSchema failed', e);
@@ -215,10 +229,80 @@ async function ensureUserForGuest(shipping) {
   return data.id;
 }
 
+// Helper: Record order status change in history
+async function recordStatusHistory(orderId, oldStatus, newStatus, changedBy = 'SYSTEM', notes = null) {
+  try {
+    await pool.query(
+      'INSERT INTO order_status_history (order_id, old_status, new_status, changed_by, notes) VALUES (?, ?, ?, ?, ?)',
+      [orderId, oldStatus, newStatus, changedBy, notes]
+    );
+  } catch (error) {
+    // Log error but don't fail the main operation
+    console.error(`Failed to record status history for order ${orderId}:`, error.message);
+  }
+}
+
+// Helper: Send order confirmation email
+async function sendOrderConfirmationEmail(orderId, orderData) {
+  try {
+    if (!orderData.shipping_email) {
+      console.log(`⚠️ No email for order #${orderId}, skipping confirmation email`);
+      return;
+    }
+
+    await httpClient.post(`${AUTH_SERVICE_URL}/auth/send-order-confirmation`, {
+      orderId,
+      email: orderData.shipping_email,
+      orderData
+    });
+    console.log(`✅ Confirmation email sent for order #${orderId}`);
+  } catch (error) {
+    // Log error but don't fail the main operation
+    console.error(`Failed to send confirmation email for order #${orderId}:`, error.message);
+  }
+}
+
+// Helper: Calculate and add loyalty points (10% of order total)
+// Example: 1,000,000 VND = 100 points = 100,000 VND value
+async function addLoyaltyPoints(userId, orderId, orderTotalCents) {
+  try {
+    if (!userId) {
+      console.log(`⚠️ No userId for order #${orderId}, skipping loyalty points`);
+      return;
+    }
+
+    // Calculate points: 10% of order total
+    // 1 point = 1,000 VND
+    // Example: 1,000,000 VND → 10% = 100,000 VND = 100 points
+    // Note: orderTotalCents is in VND (despite the name), not actual cents
+    const pointsEarned = Math.floor((orderTotalCents * 0.1) / 1000); // 10% of total, then convert to points (1 point = 1,000 VND)
+    
+    if (pointsEarned <= 0) {
+      console.log(`ℹ️ No points to add for order #${orderId} (total: ${orderTotalCents} VND)`);
+      return;
+    }
+
+    // Update user points in auth-service
+    try {
+      await httpClient.post(`${AUTH_SERVICE_URL}/auth/add-loyalty-points`, {
+        userId,
+        orderId,
+        points: pointsEarned,
+        description: `Tích lũy từ đơn hàng #${orderId}`
+      });
+      console.log(`✅ Added ${pointsEarned} loyalty points to user ${userId} for order #${orderId}`);
+    } catch (error) {
+      console.error(`Failed to add loyalty points:`, error.message);
+    }
+  } catch (error) {
+    console.error(`Error in addLoyaltyPoints for order #${orderId}:`, error.message);
+  }
+}
+
 app.post('/orders/checkout', async (req, res) => {
   const userIdHeader = req.headers['x-user-id'];
   const authenticatedUserId = userIdHeader ? parseInt(userIdHeader, 10) : null;
-  const { items, shipping = {}, paymentMethod = 'COD', couponCode } = req.body;
+  const { items, shipping = {}, paymentMethod = 'COD', couponCode, pointsToUse } = req.body;
   const errors = [];
   if (!Array.isArray(items) || items.length === 0) errors.push('Giỏ hàng trống');
   if (Array.isArray(items)) {
@@ -265,7 +349,7 @@ app.post('/orders/checkout', async (req, res) => {
   
   try {
     return await lockManager.withLock(orderLockKey, async () => {
-      return await processCheckout(userId, items, shipping, paymentMethod, couponCode, pool, res);
+      return await processCheckout(userId, items, shipping, paymentMethod, couponCode, pointsToUse, pool, res);
     }, { ttlSeconds: 30, maxRetries: 1, throwOnFailure: false });
   } catch (error) {
     console.error('Order creation lock error:', error);
@@ -277,12 +361,16 @@ app.post('/orders/checkout', async (req, res) => {
 });
 
 // Extracted checkout logic for cleaner lock handling
-async function processCheckout(userId, items, shipping, paymentMethod, couponCode, pool, res) {
+async function processCheckout(userId, items, shipping, paymentMethod, couponCode, pointsToUse, pool, res) {
   
-  const shippingFeeCents = 30000; // Default 30k VND
-  const subtotalCents = items.reduce((sum, it) => sum + (it.priceCents * it.quantity), 0);
-  let discountCents = 0;
+  // Note: Variable names use "*Cents" suffix but values are actually in VND (not cents)
+  // This is a legacy naming convention - all monetary values in this service are in VND
+  const shippingFeeCents = 30000; // 30,000 VND (not 30,000 cents)
+  const subtotalCents = items.reduce((sum, it) => sum + (it.priceCents * it.quantity), 0); // All in VND
+  let discountCents = 0; // In VND
   let appliedCoupon = null;
+  let pointsDiscountCents = 0; // Discount from loyalty points (in VND)
+  let pointsUsed = 0; // Points actually used
   
   // 🔒 CRITICAL: Coupon lock with SELECT FOR UPDATE to prevent over-usage
   if (couponCode) {
@@ -290,10 +378,18 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
     try {
       await conn.beginTransaction();
       
+      // Validate code format: 5-character alphanumeric
+      const normalizedCode = couponCode.toUpperCase().trim();
+      if (!/^[A-Z0-9]{5}$/.test(normalizedCode)) {
+        await conn.rollback();
+        conn.release();
+        return res.status(400).json({ error: 'INVALID_COUPON', details: ['Mã giảm giá phải có đúng 5 ký tự chữ và số'] });
+      }
+      
       // Use pessimistic lock with SELECT FOR UPDATE
       const [[c]] = await conn.query(
         'SELECT * FROM coupons WHERE code = ? AND active = 1 AND (start_date IS NULL OR start_date <= NOW()) AND (end_date IS NULL OR end_date >= NOW()) FOR UPDATE',
-        [couponCode]
+        [normalizedCode]
       );
       
       if (!c) {
@@ -343,7 +439,32 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
     }
   }
   
-  const totalCents = subtotalCents + shippingFeeCents - discountCents;
+  // Handle loyalty points usage (before order creation to calculate correct total)
+  // Note: We'll update the orderId in points history after order is created
+  if (pointsToUse && pointsToUse > 0 && userId) {
+    try {
+      const pointsResponse = await httpClient.post(
+        `${AUTH_SERVICE_URL}/auth/use-loyalty-points`,
+        { pointsToUse, orderId: null }, // orderId will be updated after order creation
+        { headers: { 'x-user-id': userId.toString() } }
+      );
+      
+      if (pointsResponse.data && pointsResponse.data.ok) {
+        pointsDiscountCents = pointsResponse.data.discountAmount || 0; // In VND
+        pointsUsed = pointsResponse.data.pointsUsed || 0;
+        console.log(`✅ Used ${pointsUsed} points (${pointsDiscountCents} VND discount) for user ${userId}`);
+      }
+    } catch (error) {
+      console.error('Failed to use loyalty points:', error.response?.data || error.message);
+      // If points usage fails, return error to frontend
+      return res.status(400).json({ 
+        error: 'POINTS_ERROR', 
+        details: ['Không thể sử dụng điểm thưởng. Vui lòng thử lại.'] 
+      });
+    }
+  }
+  
+  const totalCents = subtotalCents + shippingFeeCents - discountCents - pointsDiscountCents; // All values in VND
   const conn = await pool.getConnection();
   
   try {
@@ -437,10 +558,12 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
     const [orderResult] = await conn.query(
       `INSERT INTO orders 
         (user_id, status, payment_method, payment_status, total_cents, discount_cents, shipping_fee_cents,
+         points_used, points_discount_cents, coupon_code,
          shipping_name, shipping_phone, shipping_email, 
          shipping_province, shipping_district, shipping_ward, shipping_address)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [userId, initialStatus, paymentMethod, initialPaymentStatus, totalCents, discountCents, shippingFeeCents,
+       pointsUsed, pointsDiscountCents, appliedCoupon?.code || null,
        shipping.name, shipping.phone, shipping.email,
        shipping.province || '', shipping.district || '', shipping.ward || '', shipping.address]
     );
@@ -458,7 +581,33 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
       );
     }
     
+    // Record initial status (PENDING) in history
+    await conn.query(
+      'INSERT INTO order_status_history (order_id, old_status, new_status, changed_by, notes) VALUES (?, ?, ?, ?, ?)',
+      [orderId, null, 'PENDING', 'SYSTEM', 'Đơn hàng được tạo']
+    );
+    
     await conn.commit();
+    
+    // Update orderId in loyalty points history (if points were used)
+    if (pointsUsed > 0 && userId) {
+      try {
+        // Get the latest points history entry for this user and update orderId
+        await httpClient.post(
+          `${AUTH_SERVICE_URL}/auth/update-points-history-order`,
+          { userId, orderId },
+          { headers: { 'x-user-id': userId.toString() } }
+        );
+      } catch (error) {
+        console.error('Failed to update points history orderId:', error.message);
+        // Non-critical error, don't fail the order
+      }
+    }
+    
+    // Note: Email will be sent when:
+    // - COD: After OTP verification (confirm-cod endpoint)
+    // - VNPay: After payment success (confirm-vnpay endpoint)
+    
     return res.status(201).json({ 
       orderId, 
       totalCents, 
@@ -496,6 +645,31 @@ app.post('/orders/:orderId/pay', async (req, res) => {
       error: 'PAYMENT_FAILED',
       message: 'Xác nhận thanh toán thất bại. Vui lòng liên hệ hỗ trợ.'
     });
+  }
+});
+
+// Get order status history
+app.get('/orders/:orderId/status-history', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const userIdHeader = req.headers['x-user-id'];
+    const userId = userIdHeader ? parseInt(userIdHeader, 10) : null;
+    
+    // Verify order belongs to user (if authenticated) or allow guest access via email
+    if (userId) {
+      const [[order]] = await pool.query('SELECT id FROM orders WHERE id = ? AND user_id = ?', [orderId, userId]);
+      if (!order) return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    const [history] = await pool.query(
+      'SELECT * FROM order_status_history WHERE order_id = ? ORDER BY created_at DESC',
+      [orderId]
+    );
+    
+    return res.json(history);
+  } catch (error) {
+    console.error('Get status history error:', error);
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
@@ -552,12 +726,24 @@ app.get('/orders', async (req, res) => {
 app.get('/orders/coupons/:code', async (req, res) => {
   try {
     const { code } = req.params;
+    
+    // Validate format: 5-character alphanumeric
+    if (!code || !/^[A-Z0-9]{5}$/i.test(code)) {
+      return res.status(400).json({ error: 'INVALID_COUPON', message: 'Mã giảm giá phải có đúng 5 ký tự chữ và số' });
+    }
+    
     const [[c]] = await pool.query(
-      'SELECT code, type, value FROM coupons WHERE UPPER(code) = UPPER(?) AND active = 1 AND (start_date IS NULL OR start_date <= NOW()) AND (end_date IS NULL OR end_date >= NOW())',
+      'SELECT code, type, value, max_usage, times_used FROM coupons WHERE UPPER(code) = UPPER(?) AND active = 1 AND (start_date IS NULL OR start_date <= NOW()) AND (end_date IS NULL OR end_date >= NOW())',
       [code]
     );
-    if (!c) return res.status(404).json({ error: 'INVALID_COUPON' });
-    return res.json(c);
+    if (!c) return res.status(404).json({ error: 'INVALID_COUPON', message: 'Mã giảm giá không hợp lệ hoặc đã hết hạn' });
+    
+    // Check max usage limit
+    if (c.max_usage && c.times_used >= c.max_usage) {
+      return res.status(400).json({ error: 'COUPON_LIMIT_REACHED', message: 'Mã giảm giá đã hết lượt sử dụng' });
+    }
+    
+    return res.json({ code: c.code, type: c.type, value: c.value });
   } catch (e) {
     return res.status(500).json({ error: 'Server error' });
   }
@@ -565,16 +751,36 @@ app.get('/orders/coupons/:code', async (req, res) => {
 
 // Admin: coupons CRUD
 app.get('/admin/coupons', async (req, res) => {
-  const [rows] = await pool.query('SELECT id, code, type, value, active, start_date, end_date FROM coupons ORDER BY id DESC LIMIT 500');
+  const [rows] = await pool.query('SELECT id, code, type, value, active, start_date, end_date, max_usage, times_used FROM coupons ORDER BY id DESC LIMIT 500');
   return res.json(rows);
 });
 
 app.post('/admin/coupons', async (req, res) => {
-  const { code, type, value = 0, active = 1, startDate = null, endDate = null } = req.body || {};
+  const { code, type, value = 0, active = 1, startDate = null, endDate = null, maxUsage = null } = req.body || {};
   const allowed = ['percentage', 'fixed', 'freeship'];
+  
+  // Validate required fields
   if (!code || !allowed.includes(type)) return res.status(400).json({ error: 'Invalid payload' });
+  
+  // Validate code format: 5-character alphanumeric
+  const normalizedCode = code.toUpperCase().trim();
+  if (!/^[A-Z0-9]{5}$/.test(normalizedCode)) {
+    return res.status(400).json({ error: 'Mã giảm giá phải có đúng 5 ký tự chữ và số (A-Z, 0-9)' });
+  }
+  
+  // Validate max_usage: maximum 10
+  if (maxUsage !== null && maxUsage !== undefined) {
+    const maxUsageNum = parseInt(maxUsage);
+    if (isNaN(maxUsageNum) || maxUsageNum < 1 || maxUsageNum > 10) {
+      return res.status(400).json({ error: 'Số lần sử dụng tối đa phải từ 1 đến 10' });
+    }
+  }
+  
   try {
-    await pool.query('INSERT INTO coupons (code, type, value, active, start_date, end_date) VALUES (UPPER(?), ?, ?, ?, ?, ?)', [code, type, value, active ? 1 : 0, startDate, endDate]);
+    await pool.query(
+      'INSERT INTO coupons (code, type, value, active, start_date, end_date, max_usage, times_used) VALUES (?, ?, ?, ?, ?, ?, ?, 0)', 
+      [normalizedCode, type, value, active ? 1 : 0, startDate || null, endDate || null, maxUsage || null]
+    );
     return res.status(201).json({ ok: true });
   } catch (e) {
     if (e && e.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Coupon already exists' });
@@ -584,16 +790,34 @@ app.post('/admin/coupons', async (req, res) => {
 
 app.put('/admin/coupons/:id', async (req, res) => {
   const { id } = req.params;
-  const { code, type, value, active, startDate, endDate } = req.body || {};
+  const { code, type, value, active, startDate, endDate, maxUsage } = req.body || {};
   const fields = [];
   const params = [];
-  if (code) { fields.push('code = UPPER(?)'); params.push(code); }
+  
+  if (code) {
+    // Validate code format: 5-character alphanumeric
+    const normalizedCode = code.toUpperCase().trim();
+    if (!/^[A-Z0-9]{5}$/.test(normalizedCode)) {
+      return res.status(400).json({ error: 'Mã giảm giá phải có đúng 5 ký tự chữ và số (A-Z, 0-9)' });
+    }
+    fields.push('code = ?'); 
+    params.push(normalizedCode);
+  }
   if (type) { fields.push('type = ?'); params.push(type); }
   if (value !== undefined) { fields.push('value = ?'); params.push(value); }
   if (active !== undefined) { fields.push('active = ?'); params.push(active ? 1 : 0); }
   if (startDate !== undefined) { fields.push('start_date = ?'); params.push(startDate); }
   if (endDate !== undefined) { fields.push('end_date = ?'); params.push(endDate); }
-  if (fields.length === 0) return res.json({ ok: true });
+  if (maxUsage !== undefined && maxUsage !== null) {
+    const maxUsageNum = parseInt(maxUsage);
+    if (isNaN(maxUsageNum) || maxUsageNum < 1 || maxUsageNum > 10) {
+      return res.status(400).json({ error: 'Số lần sử dụng tối đa phải từ 1 đến 10' });
+    }
+    fields.push('max_usage = ?'); 
+    params.push(maxUsageNum);
+  }
+  
+  if (fields.length === 0) return res.status(400).json({ error: 'No fields to update' });
   await pool.query(`UPDATE coupons SET ${fields.join(', ')} WHERE id = ?`, [...params, id]);
   return res.json({ ok: true });
 });
@@ -644,7 +868,7 @@ app.get('/admin/orders/:orderId', async (req, res) => {
 app.patch('/admin/orders/:orderId/status', async (req, res) => {
   try {
     const { orderId } = req.params;
-    const { status } = req.body;
+    const { status, notes } = req.body;
     const allowed = ['PENDING', 'CONFIRMED', 'SHIPPING', 'DELIVERED', 'CANCELLED'];
     if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid status' });
     
@@ -652,6 +876,7 @@ app.patch('/admin/orders/:orderId/status', async (req, res) => {
     const [[currentOrder]] = await pool.query('SELECT status FROM orders WHERE id = ?', [orderId]);
     if (!currentOrder) return res.status(404).json({ error: 'Order not found' });
     
+    const oldStatus = currentOrder.status;
     const [items] = await pool.query('SELECT product_id, quantity FROM order_items WHERE order_id = ?', [orderId]);
     
     // ⚠️ Stock changes handled by payment confirmation endpoints:
@@ -702,6 +927,12 @@ app.patch('/admin/orders/:orderId/status', async (req, res) => {
     }
     
     await pool.query('UPDATE orders SET status = ? WHERE id = ?', [status, orderId]);
+    
+    // Record status change in history
+    const adminId = req.headers['x-user-id'] || 'ADMIN';
+    const historyNotes = notes || `Admin cập nhật trạng thái từ ${oldStatus} sang ${status}`;
+    await recordStatusHistory(orderId, oldStatus, status, `ADMIN_${adminId}`, historyNotes);
+    
     return res.json({ ok: true });
   } catch (error) {
     console.error('Update order status error:', error);
@@ -809,6 +1040,30 @@ app.post('/orders/confirm-cod', async (req, res) => {
       ['CONFIRMED', 'PAID', orderId]
     );
     
+    // Record status change in history
+    await recordStatusHistory(orderId, 'PENDING', 'CONFIRMED', 'SYSTEM', 'Xác nhận thanh toán COD thành công');
+    
+    // Get full order data for email AFTER update to ensure we have latest data
+    const [[fullOrder]] = await pool.query(
+      'SELECT * FROM orders WHERE id = ?',
+      [orderId]
+    );
+    const [orderItems] = await pool.query(
+      'SELECT * FROM order_items WHERE order_id = ?',
+      [orderId]
+    );
+    const orderDataForEmail = { ...fullOrder, items: orderItems };
+    
+    // Send confirmation email (async, don't wait)
+    sendOrderConfirmationEmail(orderId, orderDataForEmail).catch(err => 
+      console.error('Email sending error (non-blocking):', err.message)
+    );
+    
+    // Add loyalty points (async, don't wait)
+    addLoyaltyPoints(userId, orderId, fullOrder.total_cents).catch(err =>
+      console.error('Loyalty points error (non-blocking):', err.message)
+    );
+    
     console.log(`✅ COD order #${orderId} confirmed and stock reserved`);
     await lockManager.releaseLock(lockKey, lockToken);
     return res.json({ ok: true, orderId });
@@ -858,10 +1113,37 @@ app.post('/orders/confirm-vnpay', async (req, res) => {
     // ℹ️ Stock đã được trừ khi tạo order VNPay
     // Không cần reserve lại ở đây, chỉ cần update status thành CONFIRMED
     
+    // Get full order data for email
+    const [[fullOrder]] = await pool.query(
+      'SELECT * FROM orders WHERE id = ?',
+      [orderId]
+    );
+    const [orderItems] = await pool.query(
+      'SELECT * FROM order_items WHERE order_id = ?',
+      [orderId]
+    );
+    const orderDataForEmail = { ...fullOrder, items: orderItems };
+    
     // Update order status to CONFIRMED and payment status to PAID
     await pool.query(
       'UPDATE orders SET status = ?, payment_status = ? WHERE id = ?',
       ['CONFIRMED', 'PAID', orderId]
+    );
+    
+    // Record status change in history
+    await recordStatusHistory(orderId, 'PENDING', 'CONFIRMED', 'SYSTEM', `Thanh toán VNPay thành công (TxnNo: ${transactionNo || 'N/A'})`);
+    
+    // Get userId from order
+    const userId = fullOrder.user_id;
+    
+    // Send confirmation email (async, don't wait)
+    sendOrderConfirmationEmail(orderId, orderDataForEmail).catch(err => 
+      console.error('Email sending error (non-blocking):', err.message)
+    );
+    
+    // Add loyalty points (async, don't wait)
+    addLoyaltyPoints(userId, orderId, fullOrder.total_cents).catch(err =>
+      console.error('Loyalty points error (non-blocking):', err.message)
     );
     
     console.log(`✅ VNPay order #${orderId} confirmed (TxnNo: ${transactionNo})`);
@@ -917,11 +1199,18 @@ app.post('/orders/:orderId/cancel-vnpay', async (req, res) => {
       }
     }
     
+    // Get current status before cancelling
+    const [[currentOrder]] = await pool.query('SELECT status FROM orders WHERE id = ?', [orderId]);
+    const oldStatus = currentOrder?.status || 'PENDING';
+    
     // Update order status to CANCELLED
     await pool.query(
       'UPDATE orders SET status = ?, payment_status = ? WHERE id = ?',
       ['CANCELLED', 'FAILED', orderId]
     );
+    
+    // Record status change in history
+    await recordStatusHistory(orderId, oldStatus, 'CANCELLED', 'SYSTEM', 'Hủy đơn do thanh toán VNPay thất bại');
     
     console.log(`❌ VNPay order #${orderId} cancelled due to payment failure`);
     return res.json({ ok: true });
@@ -987,8 +1276,15 @@ app.patch('/orders/:orderId/cancel', async (req, res) => {
       console.log(`ℹ️ Order #${orderId} is COD PENDING - no stock to restore`);
     }
     
+    // Get current status
+    const [[currentOrder]] = await pool.query('SELECT status FROM orders WHERE id = ?', [orderId]);
+    const oldStatus = currentOrder?.status || 'PENDING';
+    
     // Update status to CANCELLED (keep payment_status as is: PENDING or FAILED)
     await pool.query('UPDATE orders SET status = ? WHERE id = ?', ['CANCELLED', orderId]);
+    
+    // Record status change in history
+    await recordStatusHistory(orderId, oldStatus, 'CANCELLED', userId ? `USER_${userId}` : 'GUEST', 'Người dùng hủy đơn hàng');
     
     return res.json({ ok: true, message: 'Đã hủy đơn hàng thành công' });
   } catch (error) {
@@ -1008,17 +1304,31 @@ app.get('/admin/coupons', async (req, res) => {
   }
 });
 
-// Admin: Create coupon
+// Admin: Create coupon (duplicate endpoint - keeping for backward compatibility)
 app.post('/admin/coupons', async (req, res) => {
   try {
-    const { code, type, value, active, startDate, endDate } = req.body;
+    const { code, type, value, active, startDate, endDate, maxUsage } = req.body;
     if (!code || !type) return res.status(400).json({ error: 'Missing required fields' });
     
+    // Validate code format: 5-character alphanumeric
+    const normalizedCode = code.toUpperCase().trim();
+    if (!/^[A-Z0-9]{5}$/.test(normalizedCode)) {
+      return res.status(400).json({ error: 'Mã giảm giá phải có đúng 5 ký tự chữ và số (A-Z, 0-9)' });
+    }
+    
+    // Validate max_usage: maximum 10
+    if (maxUsage !== null && maxUsage !== undefined) {
+      const maxUsageNum = parseInt(maxUsage);
+      if (isNaN(maxUsageNum) || maxUsageNum < 1 || maxUsageNum > 10) {
+        return res.status(400).json({ error: 'Số lần sử dụng tối đa phải từ 1 đến 10' });
+      }
+    }
+    
     const [result] = await pool.query(
-      'INSERT INTO coupons (code, type, value, active, start_date, end_date) VALUES (?, ?, ?, ?, ?, ?)',
-      [code, type, value || 0, active ? 1 : 0, startDate || null, endDate || null]
+      'INSERT INTO coupons (code, type, value, active, start_date, end_date, max_usage, times_used) VALUES (?, ?, ?, ?, ?, ?, ?, 0)',
+      [normalizedCode, type, value || 0, active ? 1 : 0, startDate || null, endDate || null, maxUsage || null]
     );
-    return res.status(201).json({ id: result.insertId, code });
+    return res.status(201).json({ id: result.insertId, code: normalizedCode });
   } catch (error) {
     console.error('Create coupon error:', error);
     if (error.code === 'ER_DUP_ENTRY') {
@@ -1028,15 +1338,68 @@ app.post('/admin/coupons', async (req, res) => {
   }
 });
 
-// Admin: Update coupon
+// Admin: Update coupon (duplicate endpoint - keeping for backward compatibility)
 app.put('/admin/coupons/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { code, type, value, active, startDate, endDate } = req.body;
+    const { code, type, value, active, startDate, endDate, maxUsage } = req.body;
     
+    // Validate code format if provided
+    if (code) {
+      const normalizedCode = code.toUpperCase().trim();
+      if (!/^[A-Z0-9]{5}$/.test(normalizedCode)) {
+        return res.status(400).json({ error: 'Mã giảm giá phải có đúng 5 ký tự chữ và số (A-Z, 0-9)' });
+      }
+    }
+    
+    // Validate max_usage if provided
+    if (maxUsage !== null && maxUsage !== undefined) {
+      const maxUsageNum = parseInt(maxUsage);
+      if (isNaN(maxUsageNum) || maxUsageNum < 1 || maxUsageNum > 10) {
+        return res.status(400).json({ error: 'Số lần sử dụng tối đa phải từ 1 đến 10' });
+      }
+    }
+    
+    const updateFields = [];
+    const updateParams = [];
+    
+    if (code) {
+      updateFields.push('code = ?');
+      updateParams.push(code.toUpperCase().trim());
+    }
+    if (type) {
+      updateFields.push('type = ?');
+      updateParams.push(type);
+    }
+    if (value !== undefined) {
+      updateFields.push('value = ?');
+      updateParams.push(value || 0);
+    }
+    if (active !== undefined) {
+      updateFields.push('active = ?');
+      updateParams.push(active ? 1 : 0);
+    }
+    if (startDate !== undefined) {
+      updateFields.push('start_date = ?');
+      updateParams.push(startDate || null);
+    }
+    if (endDate !== undefined) {
+      updateFields.push('end_date = ?');
+      updateParams.push(endDate || null);
+    }
+    if (maxUsage !== undefined) {
+      updateFields.push('max_usage = ?');
+      updateParams.push(maxUsage || null);
+    }
+    
+    if (updateFields.length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+    
+    updateParams.push(id);
     await pool.query(
-      'UPDATE coupons SET code = ?, type = ?, value = ?, active = ?, start_date = ?, end_date = ? WHERE id = ?',
-      [code, type, value || 0, active ? 1 : 0, startDate || null, endDate || null, id]
+      `UPDATE coupons SET ${updateFields.join(', ')} WHERE id = ?`,
+      updateParams
     );
     return res.json({ ok: true });
   } catch (error) {
@@ -1089,13 +1452,24 @@ app.post('/coupons/validate', async (req, res) => {
     const { code } = req.body;
     if (!code) return res.status(400).json({ error: 'Missing coupon code' });
     
+    // Validate format: 5-character alphanumeric
+    const normalizedCode = code.toUpperCase().trim();
+    if (!/^[A-Z0-9]{5}$/.test(normalizedCode)) {
+      return res.status(400).json({ error: 'Mã giảm giá phải có đúng 5 ký tự chữ và số' });
+    }
+    
     const [[coupon]] = await pool.query(
       'SELECT * FROM coupons WHERE code = ? AND active = 1 AND (start_date IS NULL OR start_date <= NOW()) AND (end_date IS NULL OR end_date >= NOW())',
-      [code]
+      [normalizedCode]
     );
     
     if (!coupon) {
       return res.status(400).json({ error: 'Mã giảm giá không hợp lệ hoặc đã hết hạn' });
+    }
+    
+    // Check max usage limit
+    if (coupon.max_usage && coupon.times_used >= coupon.max_usage) {
+      return res.status(400).json({ error: 'Mã giảm giá đã hết lượt sử dụng' });
     }
     
     return res.json({ 

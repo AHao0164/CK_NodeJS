@@ -197,7 +197,7 @@ export default function DashboardPage() {
     try {
       setLoading(true);
       const [ordersRes, productsRes, customersRes] = await Promise.all([
-        api.get('/admin/orders', { params: { limit: 100 } }).catch(() => ({ data: [] })),
+        api.get('/admin/orders', { params: {} }).catch(() => ({ data: [] })), // Get all orders (up to 200 limit from backend)
         api.get('/admin/catalog/products', { params: { pageSize: 100 } }).catch(() => ({ data: { items: [] } })),
         api.get('/admin/users', { params: { limit: 100 } }).catch(() => ({ data: [] })),
       ]);
@@ -226,12 +226,23 @@ export default function DashboardPage() {
         return orderDate.getMonth() === lastMonth && orderDate.getFullYear() === lastMonthYear;
       });
 
+      // Calculate revenue from paid/confirmed/delivered orders
+      // Include: PAID (VNPay), CONFIRMED (COD confirmed), DELIVERED (COD delivered)
+      // Exclude: CANCELLED, PENDING
       const currentMonthRevenue = currentMonthOrders
-        .filter(o => o.status === 'DELIVERED')
+        .filter(o => 
+          o.status !== 'CANCELLED' && 
+          o.status !== 'PENDING' &&
+          (o.payment_status === 'PAID' || o.status === 'CONFIRMED' || o.status === 'DELIVERED' || o.status === 'SHIPPING')
+        )
         .reduce((sum, o) => sum + (o.total_cents || 0), 0);
 
       const lastMonthRevenue = lastMonthOrders
-        .filter(o => o.status === 'DELIVERED')
+        .filter(o => 
+          o.status !== 'CANCELLED' && 
+          o.status !== 'PENDING' &&
+          (o.payment_status === 'PAID' || o.status === 'CONFIRMED' || o.status === 'DELIVERED' || o.status === 'SHIPPING')
+        )
         .reduce((sum, o) => sum + (o.total_cents || 0), 0);
 
       const currentMonthOrderCount = currentMonthOrders.length;
@@ -244,9 +255,15 @@ export default function DashboardPage() {
       const ordersTrend = lastMonthOrderCount === 0 ? null :
         ((currentMonthOrderCount - lastMonthOrderCount) / lastMonthOrderCount * 100).toFixed(1);
 
-      // Calculate stats
+      // Calculate total revenue from paid/confirmed/delivered orders
+      // Include: PAID (VNPay), CONFIRMED (COD confirmed), DELIVERED (COD delivered), SHIPPING
+      // Exclude: CANCELLED, PENDING
       const totalRevenue = orders
-        .filter(o => o.status === 'DELIVERED')
+        .filter(o => 
+          o.status !== 'CANCELLED' && 
+          o.status !== 'PENDING' &&
+          (o.payment_status === 'PAID' || o.status === 'CONFIRMED' || o.status === 'DELIVERED' || o.status === 'SHIPPING')
+        )
         .reduce((sum, o) => sum + (o.total_cents || 0), 0);
 
       const recentOrders = orders.slice(0, 5);
@@ -263,10 +280,15 @@ export default function DashboardPage() {
       });
 
       const revenueChart = last7Days.map(date => {
+        // Include orders that are paid/confirmed/delivered/shipping (exclude cancelled/pending)
+        // Note: total_cents is already in VND (not actual cents)
         const dayOrders = orders.filter(o => 
-          o.created_at?.startsWith(date) && o.status === 'DELIVERED'
+          o.created_at?.startsWith(date) && 
+          o.status !== 'CANCELLED' && 
+          o.status !== 'PENDING' &&
+          (o.payment_status === 'PAID' || o.status === 'CONFIRMED' || o.status === 'DELIVERED' || o.status === 'SHIPPING')
         );
-        const revenue = dayOrders.reduce((sum, o) => sum + (o.total_cents || 0), 0) / 100;
+        const revenue = dayOrders.reduce((sum, o) => sum + (o.total_cents || 0), 0); // Already in VND
         return {
           date: new Date(date).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' }),
           revenue: Math.round(revenue),
@@ -388,8 +410,13 @@ export default function DashboardPage() {
           color="success"
           startIcon={<AttachMoney />}
           onClick={() => {
-            const deliveredOrders = stats.recentOrders?.filter(o => o.status === 'DELIVERED') || [];
-            exportToExcel(formatRevenueForExport(deliveredOrders), 'DoanhThu', 'Doanh thu');
+            // Export all paid/confirmed/delivered/shipping orders (exclude cancelled/pending)
+            const revenueOrders = stats.recentOrders?.filter(o => 
+              o.status !== 'CANCELLED' && 
+              o.status !== 'PENDING' &&
+              (o.payment_status === 'PAID' || o.status === 'CONFIRMED' || o.status === 'DELIVERED' || o.status === 'SHIPPING')
+            ) || [];
+            exportToExcel(formatRevenueForExport(revenueOrders), 'DoanhThu', 'Doanh thu');
           }}
           sx={{ 
             borderRadius: 2,

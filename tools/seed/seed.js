@@ -2,7 +2,7 @@ import axios from 'axios';
 
 const API_BASE = process.env.API_BASE || 'http://localhost:8080';
 
-function client(token) {
+function client(token, isAdmin = false) {
   const inst = axios.create({ 
     baseURL: API_BASE, 
     validateStatus: () => true,
@@ -11,7 +11,15 @@ function client(token) {
       'Accept': 'application/json; charset=utf-8'
     }
   });
-  if (token) inst.interceptors.request.use(cfg => { cfg.headers.Authorization = `Bearer ${token}`; return cfg; });
+  if (token) {
+    inst.interceptors.request.use(cfg => { 
+      cfg.headers.Authorization = `Bearer ${token}`;
+      if (isAdmin) {
+        cfg.headers['x-user-role'] = 'ADMIN';
+      }
+      return cfg; 
+    });
+  }
   return inst;
 }
 
@@ -386,46 +394,381 @@ async function seedCatalog(admin) {
     { sku: 'STEELSERIES-ARCTIS-7PLUS', name: 'SteelSeries Arctis 7+', brand: 'SteelSeries', cat: 'Headset - Tai nghe', priceCents: 3290000, stock: 35, description: 'Wireless, 30h battery, retractable mic', imageUrl: 'https://images.unsplash.com/photo-1599669454699-248893623440?w=800&q=80', images: ['https://images.unsplash.com/photo-1599669454699-248893623440?w=800&q=80', 'https://images.unsplash.com/photo-1545127398-14699f92334b?w=800&q=80', 'https://images.unsplash.com/photo-1591488320449-011701bb6704?w=800&q=80'], specs: { type: 'Wireless Gaming Headset', driver: '40mm neodymium', frequency_response: '20Hz - 20000Hz', impedance: '32 Ohms', surround: 'DTS Headphone:X v2.0', microphone: 'ClearCast Retractable Bidirectional', mic_frequency: '100Hz - 6500Hz', mic_sensitivity: '-38dB', connectivity: 'SteelSeries Sonar Wireless 2.4GHz + USB-C + 3.5mm', battery: '30 hours', fast_charge: '15 min = 3 hours', weight: '350g', earcups: 'AirWeave Memory Foam' }, features: ['Pin 30 giờ siêu trâu + sạc nhanh 15 phút = 3 giờ', 'Micro ClearCast rút gọn tiện lợi Discord certified', 'DTS Headphone:X v2.0 âm thanh vòm 7.1 sống động', 'Kết nối không dây 2.4GHz ổn định zero lag', 'Băng đầu treo SKI Goggle siêu thoải mái', 'Đệm tai AirWeave thoáng mát không nóng', 'Tương thích PC, PlayStation, Nintendo Switch'] }
   ];
 
-  // Xóa tất cả sản phẩm cũ (lấy hết với pageSize=1000)
+  // Lấy danh sách products hiện có để kiểm tra SKU trùng lặp
+  // Thay vì xóa tất cả, chúng ta sẽ UPDATE nếu SKU trùng hoặc tạo mới nếu chưa có
   const { data: current } = await admin.get('/admin/catalog/products?pageSize=1000');
   const existingProducts = Array.isArray(current) ? current : (current?.items || []);
-  console.log(`  → Xóa ${existingProducts.length} sản phẩm cũ`);
-  for (const p of existingProducts) {
-    try {
-      await admin.delete(`/admin/catalog/products/${p.id}`);
-    } catch (e) {}
-  }
+  const existingBySku = new Map(existingProducts.map(p => [p.sku?.toUpperCase(), p]));
+  console.log(`  → Tìm thấy ${existingProducts.length} sản phẩm hiện có`);
 
-  // Thêm sản phẩm mới
-  console.log(`  → Thêm ${products.length} sản phẩm mới`);
+  // Thêm hoặc cập nhật sản phẩm
+  console.log(`  → Thêm/cập nhật ${products.length} sản phẩm`);
   let successCount = 0;
+  let updateCount = 0;
+  let createCount = 0;
   let failCount = 0;
+  const createdProductIds = [];
+  
   for (const p of products) {
     try {
-      const response = await admin.post('/admin/catalog/products', {
-        sku: p.sku,
-        name: p.name,
-        brandId: brandByName[p.brand] || null,
-        categoryId: catByName[p.cat] || null,
-        priceCents: p.priceCents,
-        discountPercent: p.discountPercent || 0,
-        stock: p.stock,
-        description: p.description,
-        imageUrl: p.imageUrl,
-        images: p.images || [],
-        specs: p.specs || {},
-        features: p.features || []
-      });
-      if (response.status >= 200 && response.status < 300) {
-        successCount++;
+      const skuUpper = p.sku?.toUpperCase();
+      const existing = existingBySku.get(skuUpper);
+      
+      if (existing) {
+        // UPDATE sản phẩm đã tồn tại
+        try {
+          const updateResponse = await admin.put(`/admin/catalog/products/${existing.id}`, {
+            name: p.name,
+            brandId: brandByName[p.brand] || null,
+            categoryId: catByName[p.cat] || null,
+            priceCents: p.priceCents,
+            discountPercent: p.discountPercent || 0,
+            stock: p.stock,
+            description: p.description,
+            imageUrl: p.imageUrl,
+            images: p.images || [],
+            specs: p.specs || {},
+            features: p.features || []
+          });
+          if (updateResponse.status >= 200 && updateResponse.status < 300) {
+            successCount++;
+            updateCount++;
+            createdProductIds.push({ id: existing.id, name: p.name, category: p.cat });
+          } else {
+            // Nếu UPDATE thất bại, thử tạo mới với SKU khác
+            throw new Error(`Update failed: ${updateResponse.status}`);
+          }
+        } catch (updateError) {
+          // Nếu UPDATE thất bại, thử tạo mới với SKU mới (thêm timestamp)
+          const newSku = `${p.sku}-${Date.now()}`;
+          const createResponse = await admin.post('/admin/catalog/products', {
+            sku: newSku,
+            name: p.name,
+            brandId: brandByName[p.brand] || null,
+            categoryId: catByName[p.cat] || null,
+            priceCents: p.priceCents,
+            discountPercent: p.discountPercent || 0,
+            stock: p.stock,
+            description: p.description,
+            imageUrl: p.imageUrl,
+            images: p.images || [],
+            specs: p.specs || {},
+            features: p.features || []
+          });
+          if (createResponse.status >= 200 && createResponse.status < 300) {
+            successCount++;
+            createCount++;
+            createdProductIds.push({ id: createResponse.data.id, name: p.name, category: p.cat });
+          } else {
+            failCount++;
+            if (failCount <= 3) {
+              console.warn(`    Failed to create/update product "${p.name}": ${createResponse.status} - ${JSON.stringify(createResponse.data)}`);
+            }
+          }
+        }
       } else {
-        failCount++;
+        // Tạo mới sản phẩm
+        const response = await admin.post('/admin/catalog/products', {
+          sku: p.sku,
+          name: p.name,
+          brandId: brandByName[p.brand] || null,
+          categoryId: catByName[p.cat] || null,
+          priceCents: p.priceCents,
+          discountPercent: p.discountPercent || 0,
+          stock: p.stock,
+          description: p.description,
+          imageUrl: p.imageUrl,
+          images: p.images || [],
+          specs: p.specs || {},
+          features: p.features || []
+        });
+        if (response.status >= 200 && response.status < 300) {
+          successCount++;
+          createCount++;
+          createdProductIds.push({ id: response.data.id, name: p.name, category: p.cat });
+        } else {
+          failCount++;
+          if (failCount <= 3) {
+            console.warn(`    Failed to create product "${p.name}": ${response.status} - ${JSON.stringify(response.data)}`);
+          }
+        }
+      }
+      
+      // Thêm delay nhỏ giữa các requests để tránh rate limiting
+      if (successCount % 10 === 0) {
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
     } catch (error) {
       failCount++;
+      if (failCount <= 3) {
+        console.warn(`    Error processing product "${p.name}":`, error.message);
+        if (error.response) {
+          console.warn(`      Response: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
+        }
+      }
     }
   }
-  console.log(` Seed ${successCount}/${products.length} sản phẩm (${failCount} failed) - ${categories.length} danh mục`);
+  console.log(`   ✅ ${successCount}/${products.length} sản phẩm thành công (${createCount} tạo mới, ${updateCount} cập nhật, ${failCount} thất bại) - ${categories.length} danh mục`);
+  
+  // Tạo variants cho một số sản phẩm (ít nhất 2 variants mỗi sản phẩm)
+  await seedVariants(admin, createdProductIds);
+  
+  return createdProductIds;
+}
+
+async function seedVariants(admin, productIds) {
+  console.log('  → Tạo variants cho sản phẩm');
+  let variantCount = 0;
+  let variantErrorCount = 0;
+  let skippedCount = 0;
+  
+  // Chọn một số sản phẩm để tạo variants (ưu tiên laptop và CPU)
+  const productsToVariant = productIds.filter(p => 
+    p.category.includes('Laptop') || 
+    p.category.includes('CPU') || 
+    p.category.includes('GPU') ||
+    p.category.includes('RAM') ||
+    p.category.includes('SSD')
+  ).slice(0, 15); // Tạo variants cho 15 sản phẩm đầu tiên
+  
+  // Helper function để retry với exponential backoff
+  async function createVariantWithRetry(productId, variant, maxRetries = 3) {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        // Delay tăng dần: 200ms, 500ms, 1000ms
+        if (attempt > 0) {
+          const delay = Math.min(200 * Math.pow(2, attempt - 1), 1000);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+        
+        const response = await admin.post(`/admin/catalog/products/${productId}/variants`, variant);
+        if (response.status >= 200 && response.status < 300) {
+          return { success: true };
+        } else if (response.status === 503) {
+          // Service unavailable - retry
+          if (attempt < maxRetries - 1) {
+            continue;
+          }
+          return { success: false, error: `503 - ${JSON.stringify(response.data)}` };
+        } else {
+          return { success: false, error: `${response.status} - ${JSON.stringify(response.data)}` };
+        }
+      } catch (err) {
+        if (attempt < maxRetries - 1 && (err.response?.status === 503 || err.code === 'ECONNRESET')) {
+          continue; // Retry on 503 or connection reset
+        }
+        return { success: false, error: err.message };
+      }
+    }
+    return { success: false, error: 'Max retries exceeded' };
+  }
+  
+  // Lấy thông tin giá từ database
+  for (const product of productsToVariant) {
+    try {
+      // Delay nhỏ giữa các products để tránh quá tải
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Lấy thông tin product từ API để có price và variants hiện có
+      const productRes = await admin.get(`/catalog/products/${product.id}`);
+      const productData = productRes.data;
+      const basePrice = productData?.price_cents || 20000000;
+      const existingVariants = productData?.variants || [];
+      
+      // Nếu đã có ít nhất 2 variants, bỏ qua (đã đủ yêu cầu)
+      // Nếu chưa có hoặc có ít hơn 2, tạo thêm để đảm bảo có ít nhất 2 variants
+      if (existingVariants.length >= 2) {
+        skippedCount++;
+        continue; // Bỏ qua products đã có đủ variants
+      }
+      
+      // Tính số variants cần tạo (đảm bảo có ít nhất 2)
+      const neededVariants = Math.max(2 - existingVariants.length, 0);
+      if (neededVariants === 0) {
+        skippedCount++;
+        continue;
+      }
+      
+      // Tạo 2-3 variants cho mỗi sản phẩm
+      const variants = generateVariantsForProduct({ ...product, priceCents: basePrice });
+      const variantsToCreate = variants.slice(0, neededVariants);
+      
+      for (const variant of variantsToCreate) {
+        const result = await createVariantWithRetry(product.id, variant);
+        if (result.success) {
+          variantCount++;
+        } else {
+          variantErrorCount++;
+          if (variantErrorCount <= 5) {
+            console.warn(`    Failed to create variant for product ${product.id} (${product.name}): ${result.error}`);
+          }
+        }
+        
+        // Delay giữa các variants
+        await new Promise(resolve => setTimeout(resolve, 150));
+      }
+    } catch (err) {
+      variantErrorCount++;
+      if (variantErrorCount <= 5) {
+        console.warn(`    Failed to get/create variants for product ${product.id}:`, err.message);
+      }
+    }
+  }
+  
+  console.log(`   Tạo ${variantCount} variants cho ${productsToVariant.length - skippedCount} sản phẩm (${skippedCount} đã có đủ variants, ${variantErrorCount} lỗi)`);
+}
+
+function generateVariantsForProduct(product) {
+  const variants = [];
+  const category = product.category || '';
+  
+  if (category.includes('Laptop')) {
+    // Laptop variants: RAM + Storage
+    variants.push(
+      {
+        name: '16GB RAM / 512GB SSD',
+        priceCents: product.priceCents || 20000000,
+        discountPercent: 0,
+        attributes: { ram: '16GB', storage: '512GB SSD' },
+        stock: 10,
+        displayOrder: 1
+      },
+      {
+        name: '32GB RAM / 1TB SSD',
+        priceCents: (product.priceCents || 20000000) + 5000000,
+        discountPercent: 5,
+        attributes: { ram: '32GB', storage: '1TB SSD' },
+        stock: 5,
+        displayOrder: 2
+      },
+      {
+        name: '16GB RAM / 256GB SSD',
+        priceCents: (product.priceCents || 20000000) - 2000000,
+        discountPercent: 0,
+        attributes: { ram: '16GB', storage: '256GB SSD' },
+        stock: 15,
+        displayOrder: 0
+      }
+    );
+  } else if (category.includes('CPU')) {
+    // CPU variants: Box vs Tray
+    variants.push(
+      {
+        name: 'Box (Có quạt tản nhiệt)',
+        priceCents: product.priceCents || 5000000,
+        discountPercent: 0,
+        attributes: { type: 'Box', cooler: 'Included' },
+        stock: 20,
+        displayOrder: 1
+      },
+      {
+        name: 'Tray (Không có quạt)',
+        priceCents: (product.priceCents || 5000000) - 500000,
+        discountPercent: 0,
+        attributes: { type: 'Tray', cooler: 'Not Included' },
+        stock: 15,
+        displayOrder: 2
+      }
+    );
+  } else if (category.includes('GPU')) {
+    // GPU variants: Brand models
+    variants.push(
+      {
+        name: 'ASUS Dual',
+        priceCents: product.priceCents || 10000000,
+        discountPercent: 5,
+        attributes: { model: 'ASUS Dual', cooling: 'Dual Fan' },
+        stock: 8,
+        displayOrder: 1
+      },
+      {
+        name: 'MSI Gaming X',
+        priceCents: (product.priceCents || 10000000) + 2000000,
+        discountPercent: 0,
+        attributes: { model: 'MSI Gaming X', cooling: 'Triple Fan' },
+        stock: 5,
+        displayOrder: 2
+      },
+      {
+        name: 'Gigabyte Windforce',
+        priceCents: (product.priceCents || 10000000) + 1000000,
+        discountPercent: 3,
+        attributes: { model: 'Gigabyte Windforce', cooling: 'Triple Fan' },
+        stock: 7,
+        displayOrder: 3
+      }
+    );
+  } else if (category.includes('RAM')) {
+    // RAM variants: Capacity
+    variants.push(
+      {
+        name: '16GB (2x8GB)',
+        priceCents: product.priceCents || 2000000,
+        discountPercent: 0,
+        attributes: { capacity: '16GB', kit: '2x8GB' },
+        stock: 30,
+        displayOrder: 1
+      },
+      {
+        name: '32GB (2x16GB)',
+        priceCents: (product.priceCents || 2000000) * 1.8,
+        discountPercent: 5,
+        attributes: { capacity: '32GB', kit: '2x16GB' },
+        stock: 20,
+        displayOrder: 2
+      }
+    );
+  } else if (category.includes('SSD')) {
+    // SSD variants: Capacity
+    variants.push(
+      {
+        name: '500GB',
+        priceCents: (product.priceCents || 3000000) * 0.6,
+        discountPercent: 0,
+        attributes: { capacity: '500GB' },
+        stock: 40,
+        displayOrder: 1
+      },
+      {
+        name: '1TB',
+        priceCents: product.priceCents || 3000000,
+        discountPercent: 0,
+        attributes: { capacity: '1TB' },
+        stock: 30,
+        displayOrder: 2
+      },
+      {
+        name: '2TB',
+        priceCents: (product.priceCents || 3000000) * 1.8,
+        discountPercent: 8,
+        attributes: { capacity: '2TB' },
+        stock: 15,
+        displayOrder: 3
+      }
+    );
+  } else {
+    // Default: Color variants
+    variants.push(
+      {
+        name: 'Đen',
+        priceCents: product.priceCents || 1000000,
+        discountPercent: 0,
+        attributes: { color: 'Đen' },
+        stock: 20,
+        displayOrder: 1
+      },
+      {
+        name: 'Trắng',
+        priceCents: product.priceCents || 1000000,
+        discountPercent: 0,
+        attributes: { color: 'Trắng' },
+        stock: 15,
+        displayOrder: 2
+      }
+    );
+  }
+  
+  return variants;
 }
 
 async function clearUserCart(userEmail, password) {
@@ -485,7 +828,7 @@ async function seedBanners(admin) {
 }
 
 async function seedReviews() {
-  console.log('  → Tạo demo reviews');
+  console.log('  → Tạo demo reviews với ratings đa dạng');
   try {
     const { token: user1Token, userId: user1Id } = await login('tendemten051512@gmail.com', '123456');
     const user1Cli = client(user1Token);
@@ -493,23 +836,44 @@ async function seedReviews() {
     const productList = products?.items || products || [];
     if (productList.length === 0) return;
     
+    // Tạo reviews với ratings đa dạng để test filter by rating
     const sampleReviews = [
       { rating: 5, comment: 'Sản phẩm tuyệt vời! Chất lượng xuất sắc, giao hàng nhanh. Recommend!' },
-      { rating: 4, comment: 'Sản phẩm tốt trong tầm giá. Hiệu năng ổn, đáng mua.' },
       { rating: 5, comment: 'Quá hài lòng! Chính xác như mô tả. 5 sao không cần bàn cãi!' },
-      { rating: 4, comment: 'Chất lượng OK, giá cả hợp lý. Sẽ ủng hộ shop.' }
+      { rating: 4, comment: 'Sản phẩm tốt trong tầm giá. Hiệu năng ổn, đáng mua.' },
+      { rating: 4, comment: 'Chất lượng OK, giá cả hợp lý. Sẽ ủng hộ shop.' },
+      { rating: 4, comment: 'Tốt, đáp ứng kỳ vọng. Giao hàng đúng hẹn.' },
+      { rating: 3, comment: 'Ổn, không có gì đặc biệt. Giá hơi cao so với chất lượng.' },
+      { rating: 3, comment: 'Sản phẩm tạm được, nhưng có thể tốt hơn.' },
+      { rating: 2, comment: 'Không như mong đợi. Có một số vấn đề nhỏ.' },
+      { rating: 1, comment: 'Rất thất vọng. Sản phẩm không đúng mô tả.' },
+      { rating: 5, comment: 'Xuất sắc! Vượt quá mong đợi. Đáng giá từng đồng!' },
+      { rating: 4, comment: 'Tốt, nhưng có thể cải thiện thêm.' },
+      { rating: 5, comment: 'Hoàn hảo! Mua ngay không cần suy nghĩ!' }
     ];
+    
     let reviewCount = 0;
-    for (let i = 0; i < Math.min(productList.length, 20); i++) {
+    // Tạo nhiều reviews hơn để test pagination và filter
+    for (let i = 0; i < Math.min(productList.length, 30); i++) {
       const productId = productList[i].id;
-      try {
-        const response = await user1Cli.post(`/catalog/products/${productId}/reviews`, { userId: user1Id, ...sampleReviews[i % sampleReviews.length] });
-        if (response.status < 400) reviewCount++;
-      } catch (err) { }
+      // Tạo 2-4 reviews cho mỗi sản phẩm để có đủ data test
+      const numReviews = Math.floor(Math.random() * 3) + 2; // 2-4 reviews
+      
+      for (let j = 0; j < numReviews; j++) {
+        try {
+          const review = sampleReviews[(i * numReviews + j) % sampleReviews.length];
+          const response = await user1Cli.post(`/catalog/products/${productId}/reviews`, { 
+            userId: user1Id, 
+            rating: review.rating,
+            comment: review.comment + ` (Review ${j + 1} cho sản phẩm ${i + 1})`
+          });
+          if (response.status < 400) reviewCount++;
+        } catch (err) { }
+      }
     }
-    console.log(`   Tạo ${reviewCount} reviews`);
+    console.log(`   Tạo ${reviewCount} reviews với ratings từ 1-5 sao`);
   } catch (err) {
-    console.warn(`    Lỗi tạo reviews`);
+    console.warn(`    Lỗi tạo reviews:`, err.message);
   }
 }
 
@@ -528,7 +892,7 @@ async function main() {
   await signupUser('testuser6@example.com', '123456', 'Test User 6');
   
   // Update user profiles with complete info
-  console.log('  → Cập nhật thông tin user');
+  console.log('Cập nhật thông tin user');
   await updateUserProfile('tendemten051512@gmail.com', '123456', {
     fullName: 'Nguyễn Văn A',
     phone: '0912345678',
@@ -545,8 +909,22 @@ async function main() {
   });
   
   const { token: adminToken } = await login(adminEmail, adminPassword);
-  const admin = client(adminToken);
-  await seedCatalog(admin);
+  console.log(`Admin token obtained: ${adminToken ? 'Yes' : 'No'}`);
+  const admin = client(adminToken, true); // Pass true to set x-user-role header
+  
+  // Test admin access
+  try {
+    const testRes = await admin.get('/admin/catalog/brands');
+    if (testRes.status >= 400) {
+      console.error(`Admin access test failed: ${testRes.status} - ${JSON.stringify(testRes.data)}`);
+    } else {
+      console.log(`Admin access verified`);
+    }
+  } catch (e) {
+    console.error(`Admin access test error:`, e.message);
+  }
+  
+  const createdProducts = await seedCatalog(admin);
   await seedBanners(admin);
   
   console.log('  → Xóa giỏ hàng cũ');
@@ -558,19 +936,24 @@ async function main() {
   await seedDemoOrders('hoten051512@gmail.com', '123456');
 
   await seedReviews();
-  console.log('✅ Hoàn thành seed - GearUp sẵn sàng!');
-  console.log('📊 Tổng kết:');
+  console.log('Hoàn thành seed - GearUp sẵn sàng!');
+  console.log('Tổng kết:');
   console.log('   - 16 danh mục (Laptop + PC components + Peripherals)');
   console.log('   - 60+ sản phẩm đa dạng');
-  console.log('   - Filter theo category, brand, price hoạt động');
+  console.log('   - Variants cho 15+ sản phẩm (mỗi sản phẩm có 2-3 variants)');
+  console.log('   - Reviews với ratings đa dạng (1-5 sao) để test filter by rating');
+  console.log('   - Filter theo category, brand, price, rating hoạt động');
   console.log('   - Search trong specs (JSON_SEARCH)');
-  console.log('\n⚠️  LƯU Ý: Nếu bạn đang đăng nhập sẵn trong browser, hãy:');
+  console.log('   - Pagination hiển thị ngay cả khi chỉ có 1 trang');
+  console.log('   - Listview/Gridview toggle');
+  console.log('   - WebSocket real-time reviews');
+  console.log('\nLƯU Ý: Nếu bạn đang đăng nhập sẵn trong browser, hãy:');
   console.log('   1. Mở DevTools (F12)');
   console.log('   2. Console tab, chạy: localStorage.clear(); sessionStorage.clear()');
   console.log('   3. Reload trang (F5) để đăng xuất hoàn toàn\n');
 }
 
 main().catch((e) => {
-  console.error('❌ Seeding failed', e);
+  console.error('Seeding failed', e);
   process.exit(1);
 });
