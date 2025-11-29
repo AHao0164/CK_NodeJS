@@ -6,7 +6,14 @@ import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
+import { Client } from '@elastic/elasticsearch';
 import RedisLockManager from '../shared/RedisLockManager.js';
+import { chatWithAI, generateProductRecommendations } from './ai/chatbot.js';
+import { searchProductsByImageBuffer } from './ai/image-search.js';
+import { analyzeReviewSentiment, getSentimentStatistics } from './ai/sentiment-analysis.js';
+import { isAIAvailable } from './ai/gemini-client.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,6 +22,14 @@ const __dirname = path.dirname(__filename);
 const lockManager = new RedisLockManager();
 
 const app = express();
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+  cors: {
+    origin: process.env.FRONTEND_URL || "http://localhost:5173",
+    methods: ["GET", "POST"]
+  }
+});
+
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(morgan('dev'));
@@ -73,6 +88,172 @@ const pool = mysql.createPool({
   charsetNumber: 45 // utf8mb4_general_ci
 });
 
+// Initialize ElasticSearch client
+const esClient = new Client({
+  node: process.env.ELASTICSEARCH_URL || 'http://localhost:9200',
+  requestTimeout: 60000,
+  pingTimeout: 3000,
+});
+
+const ES_INDEX_NAME = 'products';
+
+// Initialize ElasticSearch index
+async function initElasticSearchIndex() {
+  try {
+    const exists = await esClient.indices.exists({ index: ES_INDEX_NAME });
+    if (!exists) {
+      await esClient.indices.create({
+        index: ES_INDEX_NAME,
+        body: {
+          settings: {
+            analysis: {
+              analyzer: {
+                vietnamese_analyzer: {
+                  type: 'custom',
+                  tokenizer: 'standard',
+                  filter: ['lowercase', 'asciifolding']
+                }
+              }
+            }
+          },
+          mappings: {
+            properties: {
+              id: { type: 'integer' },
+              name: {
+                type: 'text',
+                analyzer: 'vietnamese_analyzer',
+                fields: {
+                  keyword: { type: 'keyword' }
+                }
+              },
+              description: {
+                type: 'text',
+                analyzer: 'vietnamese_analyzer'
+              },
+              sku: { type: 'keyword' },
+              price_cents: { type: 'integer' },
+              discount_percent: { type: 'integer' },
+              brand_id: { type: 'integer' },
+              brand: {
+                type: 'text',
+                analyzer: 'vietnamese_analyzer',
+                fields: {
+                  keyword: { type: 'keyword' }
+                }
+              },
+              category_id: { type: 'integer' },
+              category: {
+                type: 'text',
+                analyzer: 'vietnamese_analyzer',
+                fields: {
+                  keyword: { type: 'keyword' }
+                }
+              },
+              stock: { type: 'integer' },
+              image_url: { type: 'keyword' },
+              specs: { type: 'object', enabled: false },
+              features: { type: 'object', enabled: false },
+              avg_rating: { type: 'float' },
+              review_count: { type: 'integer' }
+            }
+          }
+        }
+      });
+      console.log('✅ ElasticSearch index created successfully');
+    } else {
+      console.log('✅ ElasticSearch index already exists');
+    }
+  } catch (error) {
+    console.error('❌ Error initializing ElasticSearch index:', error.message);
+    // Don't throw - allow service to continue with MySQL fallback
+  }
+}
+
+// Sync product to ElasticSearch
+async function syncProductToES(product) {
+  try {
+    if (!product || !product.id) return;
+    
+    const esDoc = {
+      id: product.id,
+      name: product.name || '',
+      description: product.description || '',
+      sku: product.sku || '',
+      price_cents: product.price_cents || 0,
+      discount_percent: product.discount_percent || 0,
+      brand_id: product.brand_id || null,
+      brand: product.brand || '',
+      category_id: product.category_id || null,
+      category: product.category || '',
+      stock: product.stock || 0,
+      image_url: product.image_url || '',
+      specs: product.specs || {},
+      features: product.features || [],
+      avg_rating: product.avg_rating || 0,
+      review_count: product.review_count || 0
+    };
+
+    await esClient.index({
+      index: ES_INDEX_NAME,
+      id: product.id.toString(),
+      body: esDoc,
+      refresh: false // Don't wait for refresh for better performance
+    });
+  } catch (error) {
+    console.error(`Error syncing product ${product?.id} to ElasticSearch:`, error.message);
+    // Don't throw - allow service to continue
+  }
+}
+
+// Delete product from ElasticSearch
+async function deleteProductFromES(productId) {
+  try {
+    await esClient.delete({
+      index: ES_INDEX_NAME,
+      id: productId.toString(),
+      refresh: false
+    });
+  } catch (error) {
+    if (error.statusCode !== 404) {
+      console.error(`Error deleting product ${productId} from ElasticSearch:`, error.message);
+    }
+  }
+}
+
+// Bulk sync products to ElasticSearch
+async function bulkSyncProductsToES(products) {
+  try {
+    if (!products || products.length === 0) return;
+    
+    const body = products.flatMap(product => [
+      { index: { _index: ES_INDEX_NAME, _id: product.id.toString() } },
+      {
+        id: product.id,
+        name: product.name || '',
+        description: product.description || '',
+        sku: product.sku || '',
+        price_cents: product.price_cents || 0,
+        discount_percent: product.discount_percent || 0,
+        brand_id: product.brand_id || null,
+        brand: product.brand || '',
+        category_id: product.category_id || null,
+        category: product.category || '',
+        stock: product.stock || 0,
+        image_url: product.image_url || '',
+        specs: product.specs || {},
+        features: product.features || [],
+        avg_rating: product.avg_rating || 0,
+        review_count: product.review_count || 0
+      }
+    ]);
+
+    await esClient.bulk({ refresh: false, body });
+    console.log(`✅ Synced ${products.length} products to ElasticSearch`);
+  } catch (error) {
+    console.error('Error bulk syncing products to ElasticSearch:', error.message);
+  }
+}
+
 // Helper function to parse JSON fields from database
 function parseJsonFields(product) {
   if (!product) return product;
@@ -93,6 +274,129 @@ function parseProductsArray(products) {
   return products.map(parseJsonFields);
 }
 
+// Search products using ElasticSearch with MySQL fallback
+async function searchProductsWithES(params) {
+  const { q, page, pageSize, sort, categoryId, brandId, minPrice, maxPrice, minRating } = params;
+  const offset = (page - 1) * pageSize;
+  
+  try {
+    // Build ElasticSearch query
+    const mustClauses = [];
+    const filterClauses = [];
+    
+    // Text search
+    if (q && q.trim()) {
+      mustClauses.push({
+        multi_match: {
+          query: q,
+          fields: ['name^3', 'description^2', 'brand^2', 'category^2', 'sku'],
+          type: 'best_fields',
+          fuzziness: 'AUTO',
+          operator: 'or'
+        }
+      });
+    }
+    
+    // Filters
+    if (categoryId) {
+      filterClauses.push({ term: { category_id: categoryId } });
+    }
+    if (brandId) {
+      filterClauses.push({ term: { brand_id: brandId } });
+    }
+    if (minPrice !== null || maxPrice !== null) {
+      const priceRange = {};
+      if (minPrice !== null) priceRange.gte = minPrice;
+      if (maxPrice !== null) priceRange.lte = maxPrice;
+      filterClauses.push({ range: { price_cents: priceRange } });
+    }
+    if (minRating !== null) {
+      filterClauses.push({ range: { avg_rating: { gte: minRating } } });
+    }
+    
+    // Build sort
+    let sortClause = [];
+    if (q && sort === 'id_desc') {
+      // Use relevance score for search queries
+      sortClause = [{ _score: { order: 'desc' } }, { id: { order: 'desc' } }];
+    } else {
+      switch (sort) {
+        case 'price_asc':
+          sortClause = [{ price_cents: { order: 'asc' } }];
+          break;
+        case 'price_desc':
+          sortClause = [{ price_cents: { order: 'desc' } }];
+          break;
+        case 'name_asc':
+          sortClause = [{ 'name.keyword': { order: 'asc' } }];
+          break;
+        case 'name_desc':
+          sortClause = [{ 'name.keyword': { order: 'desc' } }];
+          break;
+        default:
+          sortClause = [{ id: { order: 'desc' } }];
+      }
+    }
+    
+    const query = {
+      index: ES_INDEX_NAME,
+      body: {
+        query: {
+          bool: {
+            must: mustClauses.length > 0 ? mustClauses : [{ match_all: {} }],
+            filter: filterClauses
+          }
+        },
+        sort: sortClause,
+        from: offset,
+        size: pageSize
+      }
+    };
+    
+    const response = await esClient.search(query);
+    const total = typeof response.body.hits.total === 'object' 
+      ? response.body.hits.total.value 
+      : response.body.hits.total;
+    const productIds = response.body.hits.hits.map(hit => hit._source.id);
+    
+    if (productIds.length === 0) {
+      return { items: [], total: 0 };
+    }
+    
+    // Fetch full product data from MySQL (with reviews, inventory, etc.)
+    const placeholders = productIds.map(() => '?').join(',');
+    const [rows] = await pool.query(
+      `SELECT p.id, p.name, p.description, p.price_cents, p.discount_percent, p.specs, p.features, p.image_url,
+              b.name AS brand, c.name AS category, i.stock, p.brand_id, p.category_id,
+              COALESCE(AVG(pr.rating), 0) AS avg_rating, COUNT(pr.id) AS review_count
+       FROM products p
+       LEFT JOIN brands b ON b.id = p.brand_id
+       LEFT JOIN categories c ON c.id = p.category_id
+       LEFT JOIN inventory i ON i.product_id = p.id
+       LEFT JOIN product_reviews pr ON pr.product_id = p.id
+       WHERE p.id IN (${placeholders})
+       GROUP BY p.id, p.name, p.description, p.price_cents, p.discount_percent, p.specs, p.features, p.image_url,
+                b.name, c.name, i.stock, p.brand_id, p.category_id
+       ORDER BY FIELD(p.id, ${placeholders})`,
+      [...productIds, ...productIds]
+    );
+    
+    // Apply minRating filter if needed (after getting review data)
+    let filteredRows = rows;
+    if (minRating !== null) {
+      filteredRows = rows.filter(p => (p.avg_rating || 0) >= minRating);
+    }
+    
+    parseProductsArray(filteredRows);
+    
+    return { items: filteredRows, total };
+  } catch (error) {
+    console.error('ElasticSearch search error:', error.message);
+    // Fallback to MySQL search
+    return null;
+  }
+}
+
 // Upload endpoint (admin only, but we'll add guard later)
 app.post('/admin/catalog/upload', upload.single('image'), async (req, res) => {
   try {
@@ -107,168 +411,213 @@ app.post('/admin/catalog/upload', upload.single('image'), async (req, res) => {
 });
 
 app.get('/catalog/products', async (req, res) => {
-  const q = String(req.query.q || '').trim();
-  const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-  const pageSize = Math.min(Math.max(parseInt(req.query.pageSize || '20', 10), 1), 100);
-  const sort = String(req.query.sort || 'id_desc');
-  const categoryId = req.query.categoryId ? parseInt(req.query.categoryId, 10) : null;
-  const brandId = req.query.brandId ? parseInt(req.query.brandId, 10) : null;
-  const minPrice = req.query.minPrice ? parseInt(req.query.minPrice, 10) : null;
-  const maxPrice = req.query.maxPrice ? parseInt(req.query.maxPrice, 10) : null;
-  
-  const offset = (page - 1) * pageSize;
-  const whereClauses = [];
-  const params = [];
-  const sortParams = [];
-  
-  // Smart sorting with relevance - count how many search terms match
-  let sortSql;
-  if (q && sort === 'id_desc') {
-    const words = q.toLowerCase().split(/\s+/).filter(t => t.length >= 2);
-    if (words.length > 1) {
-      // Multi-word: sort by number of matching terms (descending)
-      const matchCases = words.map((_, idx) => 
-        `CASE WHEN LOWER(CONCAT_WS(' ', p.name, p.description, b.name, c.name)) LIKE ? THEN 1 ELSE 0 END`
-      ).join(' + ');
-      sortSql = `(${matchCases}) DESC, p.id DESC`;
-      words.forEach(word => {
-        sortParams.push(`%${word}%`);
-      });
+  try {
+    const q = String(req.query.q || '').trim();
+    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
+    const pageSize = Math.min(Math.max(parseInt(req.query.pageSize || '20', 10), 1), 100);
+    const sort = String(req.query.sort || 'id_desc');
+    const categoryId = req.query.categoryId ? parseInt(req.query.categoryId, 10) : null;
+    const brandId = req.query.brandId ? parseInt(req.query.brandId, 10) : null;
+    const minPrice = req.query.minPrice ? parseInt(req.query.minPrice, 10) : null;
+    const maxPrice = req.query.maxPrice ? parseInt(req.query.maxPrice, 10) : null;
+    const minRating = req.query.minRating ? parseFloat(req.query.minRating) : null;
+    
+    // Try ElasticSearch first
+    const esResult = await searchProductsWithES({
+      q, page, pageSize, sort, categoryId, brandId, minPrice, maxPrice, minRating
+    });
+    
+    if (esResult !== null) {
+      return res.json({ items: esResult.items, page, pageSize, total: esResult.total });
+    }
+    
+    // Fallback to MySQL search
+    console.log('⚠️ Falling back to MySQL search');
+    const offset = (page - 1) * pageSize;
+    const whereClauses = [];
+    const params = [];
+    const sortParams = [];
+    
+    // Smart sorting with relevance - count how many search terms match
+    let sortSql;
+    if (q && sort === 'id_desc') {
+      const words = q.toLowerCase().split(/\s+/).filter(t => t.length >= 2);
+      if (words.length > 1) {
+        // Multi-word: sort by number of matching terms (descending)
+        const matchCases = words.map((_, idx) => 
+          `CASE WHEN LOWER(CONCAT_WS(' ', p.name, p.description, b.name, c.name)) LIKE ? THEN 1 ELSE 0 END`
+        ).join(' + ');
+        sortSql = `(${matchCases}) DESC, p.id DESC`;
+        words.forEach(word => {
+          sortParams.push(`%${word}%`);
+        });
+      } else {
+        // Single word: prioritize exact matches
+        sortSql = `
+          CASE 
+            WHEN p.name LIKE ? THEN 1
+            WHEN b.name LIKE ? THEN 2
+            WHEN c.name LIKE ? THEN 3
+            WHEN p.description LIKE ? THEN 4
+            ELSE 5
+          END,
+          p.id DESC
+        `;
+        const exactMatch = `%${q}%`;
+        sortParams.push(exactMatch, exactMatch, exactMatch, exactMatch);
+      }
     } else {
-      // Single word: prioritize exact matches
-      sortSql = `
-        CASE 
-          WHEN p.name LIKE ? THEN 1
-          WHEN b.name LIKE ? THEN 2
-          WHEN c.name LIKE ? THEN 3
-          WHEN p.description LIKE ? THEN 4
-          ELSE 5
-        END,
-        p.id DESC
+      // Sort by final price (after discount) for price sorting
+      sortSql =
+        sort === 'price_asc' ? '(p.price_cents * (100 - COALESCE(p.discount_percent, 0)) / 100) ASC' :
+          sort === 'price_desc' ? '(p.price_cents * (100 - COALESCE(p.discount_percent, 0)) / 100) DESC' :
+            sort === 'name_asc' ? 'p.name ASC' :
+              sort === 'name_desc' ? 'p.name DESC' :
+                'p.id DESC';
+    }
+    
+    // Intelligent search - tìm kiếm siêu linh hoạt với relevance scoring
+    if (q) {
+      const originalQuery = q.toLowerCase().trim();
+      const normalizedQuery = originalQuery.replace(/\s+/g, '');
+      const words = originalQuery.split(/\s+/).filter(t => t.length >= 2);
+      
+      // Build một OR lớn cho tất cả các cách tìm
+      const searchConditions = [];
+      
+      // Nếu chỉ có 1 từ hoặc là cụm ngắn, tìm rộng
+      if (words.length === 1 || originalQuery.length <= 15) {
+        // 1. Tìm cụm gốc (có khoảng trắng)
+        searchConditions.push(`LOWER(p.name) LIKE ?`);
+        searchConditions.push(`LOWER(p.description) LIKE ?`);
+        searchConditions.push(`LOWER(b.name) LIKE ?`);
+        searchConditions.push(`LOWER(c.name) LIKE ?`);
+        searchConditions.push(`LOWER(p.sku) LIKE ?`);
+        params.push(`%${originalQuery}%`, `%${originalQuery}%`, `%${originalQuery}%`, `%${originalQuery}%`, `%${originalQuery}%`);
+        
+        // 2. Tìm không khoảng trắng (laptopgaming -> "Laptop Gaming")
+        searchConditions.push(`REPLACE(LOWER(p.name), ' ', '') LIKE ?`);
+        searchConditions.push(`REPLACE(LOWER(c.name), ' ', '') LIKE ?`);
+        searchConditions.push(`REPLACE(LOWER(p.description), ' ', '') LIKE ?`);
+        searchConditions.push(`REPLACE(LOWER(b.name), ' ', '') LIKE ?`);
+        params.push(`%${normalizedQuery}%`, `%${normalizedQuery}%`, `%${normalizedQuery}%`, `%${normalizedQuery}%`);
+        
+        // 3. Tìm trong JSON specs/features
+        searchConditions.push(`JSON_SEARCH(LOWER(CAST(p.specs AS CHAR)), "one", ?) IS NOT NULL`);
+        searchConditions.push(`JSON_SEARCH(LOWER(CAST(p.features AS CHAR)), "one", ?) IS NOT NULL`);
+        params.push(`%${originalQuery}%`, `%${originalQuery}%`);
+      } else {
+        // Nhiều từ: tìm sản phẩm match TẤT CẢ các từ (AND logic cho mỗi từ)
+        words.forEach(word => {
+          searchConditions.push(`(
+            LOWER(p.name) LIKE ? OR 
+            LOWER(b.name) LIKE ? OR 
+            LOWER(c.name) LIKE ? OR 
+            LOWER(p.description) LIKE ? OR
+            REPLACE(LOWER(c.name), ' ', '') LIKE ? OR
+            JSON_SEARCH(LOWER(CAST(p.specs AS CHAR)), "one", ?) IS NOT NULL
+          )`);
+          const like = `%${word}%`;
+          params.push(like, like, like, like, like, `%${word}%`);
+        });
+      }
+      
+      if (searchConditions.length > 0) {
+        const joinOperator = words.length > 1 && originalQuery.length > 15 ? ' AND ' : ' OR ';
+        whereClauses.push(`(${searchConditions.join(joinOperator)})`);
+      }
+    }
+    
+    // Filter theo category
+    if (categoryId) {
+      whereClauses.push('p.category_id = ?');
+      params.push(categoryId);
+    }
+    
+    // Filter theo brand
+    if (brandId) {
+      whereClauses.push('p.brand_id = ?');
+      params.push(brandId);
+    }
+    
+    // Filter theo giá (dùng giá sau discount)
+    if (minPrice !== null) {
+      whereClauses.push('(p.price_cents * (100 - p.discount_percent) / 100) >= ?');
+      params.push(minPrice);
+    }
+    if (maxPrice !== null) {
+      whereClauses.push('(p.price_cents * (100 - p.discount_percent) / 100) <= ?');
+      params.push(maxPrice);
+    }
+    
+    const whereSql = whereClauses.length ? 'WHERE ' + whereClauses.join(' AND ') : '';
+    
+    // Filter by rating - need to use HAVING clause after GROUP BY
+    let havingClause = '';
+    const havingParams = [];
+    if (minRating !== null && minRating >= 0 && minRating <= 5) {
+      havingClause = 'HAVING AVG(pr.rating) >= ?';
+      havingParams.push(minRating);
+    }
+    
+    const finalParams = [...params, ...sortParams, ...havingParams, pageSize, offset];
+
+    const [rows] = await pool.query(
+      `SELECT p.id, p.name, p.description, p.price_cents, p.discount_percent, p.specs, p.features, p.image_url,
+              b.name AS brand, c.name AS category, i.stock, p.brand_id, p.category_id,
+              COALESCE(AVG(pr.rating), 0) AS avg_rating, COUNT(pr.id) AS review_count
+       FROM products p
+       LEFT JOIN brands b ON b.id = p.brand_id
+       LEFT JOIN categories c ON c.id = p.category_id
+       LEFT JOIN inventory i ON i.product_id = p.id
+       LEFT JOIN product_reviews pr ON pr.product_id = p.id
+       ${whereSql}
+       GROUP BY p.id, p.name, p.description, p.price_cents, p.discount_percent, p.specs, p.features, p.image_url,
+                b.name, c.name, i.stock, p.brand_id, p.category_id
+       ${havingClause}
+       ORDER BY ${sortSql}, p.id DESC
+       LIMIT ? OFFSET ?`,
+      finalParams
+    );
+
+    // Count query with same filters
+    let countQuery;
+    let countParams;
+    if (havingClause) {
+      countQuery = `
+        SELECT COUNT(*) AS total 
+        FROM (
+          SELECT p.id
+          FROM products p
+          LEFT JOIN brands b ON b.id = p.brand_id 
+          LEFT JOIN categories c ON c.id = p.category_id
+          LEFT JOIN product_reviews pr ON pr.product_id = p.id
+          ${whereSql}
+          GROUP BY p.id
+          ${havingClause}
+        ) AS filtered_products
       `;
-      const exactMatch = `%${q}%`;
-      sortParams.push(exactMatch, exactMatch, exactMatch, exactMatch);
-    }
-  } else {
-    sortSql =
-      sort === 'price_asc' ? 'p.price_cents ASC' :
-        sort === 'price_desc' ? 'p.price_cents DESC' :
-          sort === 'name_asc' ? 'p.name ASC' :
-            sort === 'name_desc' ? 'p.name DESC' :
-              'p.id DESC';
-  }
-  
-  // Intelligent search - tìm kiếm siêu linh hoạt với relevance scoring
-  if (q) {
-    const originalQuery = q.toLowerCase().trim();
-    const normalizedQuery = originalQuery.replace(/\s+/g, '');
-    const words = originalQuery.split(/\s+/).filter(t => t.length >= 2);
-    
-    // Build một OR lớn cho tất cả các cách tìm
-    const searchConditions = [];
-    
-    // Nếu chỉ có 1 từ hoặc là cụm ngắn, tìm rộng
-    if (words.length === 1 || originalQuery.length <= 15) {
-      // 1. Tìm cụm gốc (có khoảng trắng)
-      searchConditions.push(`LOWER(p.name) LIKE ?`);
-      searchConditions.push(`LOWER(p.description) LIKE ?`);
-      searchConditions.push(`LOWER(b.name) LIKE ?`);
-      searchConditions.push(`LOWER(c.name) LIKE ?`);
-      searchConditions.push(`LOWER(p.sku) LIKE ?`);
-      params.push(`%${originalQuery}%`, `%${originalQuery}%`, `%${originalQuery}%`, `%${originalQuery}%`, `%${originalQuery}%`);
-      
-      // 2. Tìm không khoảng trắng (laptopgaming -> "Laptop Gaming")
-      searchConditions.push(`REPLACE(LOWER(p.name), ' ', '') LIKE ?`);
-      searchConditions.push(`REPLACE(LOWER(c.name), ' ', '') LIKE ?`);
-      searchConditions.push(`REPLACE(LOWER(p.description), ' ', '') LIKE ?`);
-      searchConditions.push(`REPLACE(LOWER(b.name), ' ', '') LIKE ?`);
-      params.push(`%${normalizedQuery}%`, `%${normalizedQuery}%`, `%${normalizedQuery}%`, `%${normalizedQuery}%`);
-      
-      // 3. Tìm trong JSON specs/features
-      searchConditions.push(`JSON_SEARCH(LOWER(CAST(p.specs AS CHAR)), "one", ?) IS NOT NULL`);
-      searchConditions.push(`JSON_SEARCH(LOWER(CAST(p.features AS CHAR)), "one", ?) IS NOT NULL`);
-      params.push(`%${originalQuery}%`, `%${originalQuery}%`);
+      countParams = [...params, ...havingParams];
     } else {
-      // Nhiều từ: tìm sản phẩm match TẤT CẢ các từ (AND logic cho mỗi từ)
-      // Nhưng mỗi từ có thể match ở nhiều fields khác nhau (OR trong field)
-      words.forEach(word => {
-        searchConditions.push(`(
-          LOWER(p.name) LIKE ? OR 
-          LOWER(b.name) LIKE ? OR 
-          LOWER(c.name) LIKE ? OR 
-          LOWER(p.description) LIKE ? OR
-          REPLACE(LOWER(c.name), ' ', '') LIKE ? OR
-          JSON_SEARCH(LOWER(CAST(p.specs AS CHAR)), "one", ?) IS NOT NULL
-        )`);
-        const like = `%${word}%`;
-        params.push(like, like, like, like, like, `%${word}%`);
-      });
+      countQuery = `
+        SELECT COUNT(DISTINCT p.id) AS total 
+        FROM products p
+        LEFT JOIN brands b ON b.id = p.brand_id 
+        LEFT JOIN categories c ON c.id = p.category_id
+        ${whereSql}
+      `;
+      countParams = [...params];
     }
-    
-    if (searchConditions.length > 0) {
-      // Nếu nhiều từ, dùng AND để require tất cả từ match
-      const joinOperator = words.length > 1 && originalQuery.length > 15 ? ' AND ' : ' OR ';
-      whereClauses.push(`(${searchConditions.join(joinOperator)})`);
-    }
-  }
-  
-  // Filter theo category
-  if (categoryId) {
-    whereClauses.push('p.category_id = ?');
-    params.push(categoryId);
-  }
-  
-  // Filter theo brand
-  if (brandId) {
-    whereClauses.push('p.brand_id = ?');
-    params.push(brandId);
-  }
-  
-  // Filter theo giá (dùng giá sau discount)
-  if (minPrice !== null) {
-    whereClauses.push('(p.price_cents * (100 - p.discount_percent) / 100) >= ?');
-    params.push(minPrice);
-  }
-  if (maxPrice !== null) {
-    whereClauses.push('(p.price_cents * (100 - p.discount_percent) / 100) <= ?');
-    params.push(maxPrice);
-  }
-  
-  const whereSql = whereClauses.length ? 'WHERE ' + whereClauses.join(' AND ') : '';
-  const finalParams = [...params, ...sortParams, pageSize, offset];
+    const [[{ total }]] = await pool.query(countQuery, countParams);
 
-  // Debug logging
-  if (q) {
-    console.log('Search query:', q);
-    console.log('WHERE SQL:', whereSql);
-    console.log('Search params:', params.length, 'Sort params:', sortParams.length);
+    // Parse JSON fields for all products
+    parseProductsArray(rows);
+
+    return res.json({ items: rows, page, pageSize, total });
+  } catch (error) {
+    console.error('Error in /catalog/products:', error);
+    return res.status(500).json({ error: 'Server error' });
   }
-
-  const [rows] = await pool.query(
-    `SELECT p.id, p.name, p.description, p.price_cents, p.discount_percent, p.specs, p.features, p.image_url,
-            b.name AS brand, c.name AS category, i.stock, p.brand_id, p.category_id
-     FROM products p
-     LEFT JOIN brands b ON b.id = p.brand_id
-     LEFT JOIN categories c ON c.id = p.category_id
-     LEFT JOIN inventory i ON i.product_id = p.id
-     ${whereSql}
-     ORDER BY ${sortSql}
-     LIMIT ? OFFSET ?`,
-    finalParams
-  );
-
-  const [[{ total }]] = await pool.query(
-    `SELECT COUNT(*) AS total FROM products p 
-     LEFT JOIN brands b ON b.id = p.brand_id 
-     LEFT JOIN categories c ON c.id = p.category_id 
-     ${whereSql}`,
-    params
-  );
-
-  // Parse JSON fields for all products
-  parseProductsArray(rows);
-
-  return res.json({ items: rows, page, pageSize, total });
 });
 
 app.get('/catalog/products/:id', async (req, res) => {
@@ -286,10 +635,37 @@ app.get('/catalog/products/:id', async (req, res) => {
   const [images] = await pool.query('SELECT url, sort_order FROM product_images WHERE product_id = ? ORDER BY sort_order', [id]);
   const [[inv]] = await pool.query('SELECT stock FROM inventory WHERE product_id = ?', [id]);
   
+  // Get variants with inventory
+  const [variants] = await pool.query(
+    `SELECT v.id, v.name, v.sku, v.price_cents, v.discount_percent, v.image_url, v.attributes, v.display_order,
+            COALESCE(vi.stock, 0) AS stock
+     FROM product_variants v
+     LEFT JOIN variant_inventory vi ON vi.variant_id = v.id
+     WHERE v.product_id = ?
+     ORDER BY v.display_order ASC, v.id ASC`,
+    [id]
+  );
+  
   // Parse JSON fields
   parseJsonFields(product);
   
-  return res.json({ ...product, images, stock: inv ? inv.stock : 0 });
+  // Parse variant attributes
+  variants.forEach(v => {
+    if (v.attributes && typeof v.attributes === 'string') {
+      try {
+        v.attributes = JSON.parse(v.attributes);
+      } catch (e) {
+        v.attributes = {};
+      }
+    }
+  });
+  
+  return res.json({ 
+    ...product, 
+    images, 
+    stock: inv ? inv.stock : 0,
+    variants: variants.length > 0 ? variants : null // null if no variants, array if has variants
+  });
 });
 
 // Public: get related products (same brand first, then category)
@@ -326,6 +702,308 @@ app.get('/catalog/products/:id/related', async (req, res) => {
   } catch (e) {
     console.error('Get related products error:', e);
     return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ==================== AI FEATURES ====================
+
+// AI Chatbot: Chat với AI để được tư vấn sản phẩm
+app.post('/catalog/ai/chat', async (req, res) => {
+  try {
+    const { message } = req.body;
+    
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    if (!isAIAvailable()) {
+      return res.status(503).json({ 
+        error: 'AI service not available. Please configure GEMINI_API_KEY.' 
+      });
+    }
+
+    // Get available products for context
+    // Try to find relevant products first based on keywords in the message
+    const messageLower = message.toLowerCase();
+    let productsQuery = `
+      SELECT p.id, p.name, p.description, p.price_cents, p.discount_percent, p.image_url,
+             b.name AS brand, c.name AS category
+      FROM products p
+      LEFT JOIN brands b ON b.id = p.brand_id
+      LEFT JOIN categories c ON c.id = p.category_id
+    `;
+    
+    // Smart filtering based on common keywords
+    const keywords = {
+      'tai nghe': ['headset', 'tai nghe', 'headphone', 'earphone'],
+      'bàn phím': ['keyboard', 'bàn phím', 'bàn phim'],
+      'chuột': ['mouse', 'chuột'],
+      'màn hình': ['monitor', 'màn hình', 'screen'],
+      'laptop': ['laptop', 'notebook'],
+      'pc': ['pc', 'máy tính', 'desktop']
+    };
+    
+    let whereClause = '';
+    let params = [];
+    
+    for (const [key, terms] of Object.entries(keywords)) {
+      if (terms.some(term => messageLower.includes(term))) {
+        const conditions = terms.map(term => 
+          `(LOWER(p.name) LIKE ? OR LOWER(p.description) LIKE ? OR LOWER(c.name) LIKE ?)`
+        );
+        whereClause = `WHERE (${conditions.join(' OR ')})`;
+        terms.forEach(term => {
+          params.push(`%${term}%`, `%${term}%`, `%${term}%`);
+        });
+        break;
+      }
+    }
+    
+    // If no specific match, get all products but prioritize by relevance
+    if (!whereClause) {
+      productsQuery += ` ORDER BY p.id DESC LIMIT 100`;
+    } else {
+      productsQuery += ` ${whereClause} ORDER BY p.id DESC LIMIT 100`;
+    }
+    
+    const [products] = await pool.query(productsQuery, params);
+
+    const chatResult = await chatWithAI(message, products);
+
+    // Fetch suggested products if any
+    let suggestedProducts = [];
+    if (chatResult.suggestedProductIds && chatResult.suggestedProductIds.length > 0) {
+      const placeholders = chatResult.suggestedProductIds.map(() => '?').join(',');
+      const [suggested] = await pool.query(
+        `SELECT p.id, p.name, p.description, p.price_cents, p.discount_percent, p.image_url,
+                b.name AS brand, c.name AS category
+         FROM products p
+         LEFT JOIN brands b ON b.id = p.brand_id
+         LEFT JOIN categories c ON c.id = p.category_id
+         WHERE p.id IN (${placeholders})`,
+        chatResult.suggestedProductIds
+      );
+      parseProductsArray(suggested);
+      suggestedProducts = suggested;
+    }
+
+    return res.json({
+      response: chatResult.response,
+      suggestedProducts: suggestedProducts,
+      searchKeywords: chatResult.searchKeywords || [],
+      reasoning: chatResult.reasoning || ''
+    });
+  } catch (error) {
+    console.error('AI chat error:', error);
+    return res.status(500).json({ error: 'Failed to process chat request' });
+  }
+});
+
+// AI Image Search: Tìm sản phẩm bằng hình ảnh
+app.post('/catalog/ai/search-by-image', upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Image file is required' });
+    }
+
+    if (!isAIAvailable()) {
+      return res.status(503).json({ 
+        error: 'AI service not available. Please configure GEMINI_API_KEY.' 
+      });
+    }
+
+    // Get available products for matching
+    const [products] = await pool.query(
+      `SELECT p.id, p.name, p.description, p.price_cents, p.discount_percent, p.image_url,
+              b.name AS brand, c.name AS category, p.specs, p.features
+       FROM products p
+       LEFT JOIN brands b ON b.id = p.brand_id
+       LEFT JOIN categories c ON c.id = p.category_id
+       LIMIT 100`
+    );
+
+    parseProductsArray(products);
+
+    // Analyze image
+    const imageBuffer = fs.readFileSync(req.file.path);
+    const mimeType = req.file.mimetype;
+    const searchResult = await searchProductsByImageBuffer(imageBuffer, mimeType, products);
+
+    // Clean up uploaded file
+    fs.unlinkSync(req.file.path);
+
+    if (searchResult.error) {
+      return res.status(500).json({ error: searchResult.error });
+    }
+
+    // Fetch matched products
+    let matchedProducts = [];
+    if (searchResult.matches && searchResult.matches.length > 0) {
+      const productIds = searchResult.matches.map(m => m.productId);
+      const placeholders = productIds.map(() => '?').join(',');
+      const [matched] = await pool.query(
+        `SELECT p.id, p.name, p.description, p.price_cents, p.discount_percent, p.image_url,
+                b.name AS brand, c.name AS category
+         FROM products p
+         LEFT JOIN brands b ON b.id = p.brand_id
+         LEFT JOIN categories c ON c.id = p.category_id
+         WHERE p.id IN (${placeholders})`,
+        productIds
+      );
+      parseProductsArray(matched);
+      
+      // Sort by similarity
+      matchedProducts = productIds.map(id => 
+        matched.find(p => p.id === id)
+      ).filter(Boolean);
+    }
+
+    return res.json({
+      description: searchResult.description,
+      features: searchResult.features || [],
+      matches: searchResult.matches || [],
+      products: matchedProducts,
+      searchKeywords: searchResult.searchKeywords || []
+    });
+  } catch (error) {
+    console.error('Image search error:', error);
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    return res.status(500).json({ error: 'Failed to analyze image' });
+  }
+});
+
+// AI Sentiment Analysis: Phân tích cảm xúc của reviews
+app.post('/catalog/ai/analyze-sentiment', async (req, res) => {
+  try {
+    const { reviewText, productId } = req.body;
+
+    if (!reviewText && !productId) {
+      return res.status(400).json({ error: 'Either reviewText or productId is required' });
+    }
+
+    if (!isAIAvailable()) {
+      return res.status(503).json({ 
+        error: 'AI service not available. Please configure GEMINI_API_KEY.' 
+      });
+    }
+
+    let analysis;
+
+    if (productId) {
+      // Analyze all reviews for a product
+      const [reviews] = await pool.query(
+        `SELECT id, comment, rating, user_id, created_at 
+         FROM product_reviews 
+         WHERE product_id = ? 
+         ORDER BY created_at DESC`,
+        [productId]
+      );
+
+      if (reviews.length === 0) {
+        return res.status(404).json({ error: 'No reviews found for this product' });
+      }
+
+      const statistics = await getSentimentStatistics(reviews);
+      const individualAnalyses = await Promise.all(
+        reviews.map(r => analyzeReviewSentiment(r.comment || ''))
+      );
+
+      analysis = {
+        productId: parseInt(productId),
+        statistics: statistics,
+        reviews: reviews.map((r, idx) => ({
+          reviewId: r.id,
+          sentiment: individualAnalyses[idx].sentiment,
+          score: individualAnalyses[idx].score,
+          confidence: individualAnalyses[idx].confidence,
+          keywords: individualAnalyses[idx].keywords || [],
+          summary: individualAnalyses[idx].summary || ''
+        }))
+      };
+    } else {
+      // Analyze single review text
+      const result = await analyzeReviewSentiment(reviewText);
+      analysis = {
+        sentiment: result.sentiment,
+        score: result.score,
+        confidence: result.confidence,
+        keywords: result.keywords || [],
+        summary: result.summary || ''
+      };
+    }
+
+    return res.json(analysis);
+  } catch (error) {
+    console.error('Sentiment analysis error:', error);
+    return res.status(500).json({ error: 'Failed to analyze sentiment' });
+  }
+});
+
+// AI Product Recommendations: Đề xuất sản phẩm dựa trên preferences
+app.post('/catalog/ai/recommendations', async (req, res) => {
+  try {
+    const { preferences } = req.body;
+
+    if (!preferences || typeof preferences !== 'string') {
+      return res.status(400).json({ error: 'Preferences text is required' });
+    }
+
+    if (!isAIAvailable()) {
+      return res.status(503).json({ 
+        error: 'AI service not available. Please configure GEMINI_API_KEY.' 
+      });
+    }
+
+    // Get available products
+    const [products] = await pool.query(
+      `SELECT p.id, p.name, p.description, p.price_cents, p.discount_percent, p.image_url,
+              b.name AS brand, c.name AS category,
+              COALESCE(AVG(pr.rating), 0) AS avg_rating
+       FROM products p
+       LEFT JOIN brands b ON b.id = p.brand_id
+       LEFT JOIN categories c ON c.id = p.category_id
+       LEFT JOIN product_reviews pr ON pr.product_id = p.id
+       GROUP BY p.id, p.name, p.description, p.price_cents, p.discount_percent, p.image_url,
+                b.name, c.name
+       LIMIT 50`
+    );
+
+    parseProductsArray(products);
+
+    const recommendations = await generateProductRecommendations(preferences, products);
+
+    // Fetch recommended products
+    let recommendedProducts = [];
+    if (recommendations.recommendations && recommendations.recommendations.length > 0) {
+      const productIds = recommendations.recommendations.map(r => r.productId);
+      const placeholders = productIds.map(() => '?').join(',');
+      const [recommended] = await pool.query(
+        `SELECT p.id, p.name, p.description, p.price_cents, p.discount_percent, p.image_url,
+                b.name AS brand, c.name AS category
+         FROM products p
+         LEFT JOIN brands b ON b.id = p.brand_id
+         LEFT JOIN categories c ON c.id = p.category_id
+         WHERE p.id IN (${placeholders})`,
+        productIds
+      );
+      parseProductsArray(recommended);
+      
+      recommendedProducts = productIds.map(id => {
+        const product = recommended.find(p => p.id === id);
+        const rec = recommendations.recommendations.find(r => r.productId === id);
+        return product ? { ...product, reason: rec?.reason || '' } : null;
+      }).filter(Boolean);
+    }
+
+    return res.json({
+      recommendations: recommendedProducts,
+      preferences: preferences
+    });
+  } catch (error) {
+    console.error('Recommendations error:', error);
+    return res.status(500).json({ error: 'Failed to generate recommendations' });
   }
 });
 
@@ -564,7 +1242,16 @@ app.post('/admin/catalog/products', async (req, res) => {
   try {
     await conn.beginTransaction();
     // Generate SKU if not provided
-    const productSku = sku || `SKU${Date.now()}`;
+    let productSku = sku || `SKU${Date.now()}`;
+    
+    // Check if SKU already exists, if so, generate a new one
+    if (sku) {
+      const [existing] = await conn.query('SELECT id FROM products WHERE sku = ?', [productSku]);
+      if (existing.length > 0) {
+        productSku = `${sku}-${Date.now()}`;
+      }
+    }
+    
     const [result] = await conn.query(
       'INSERT INTO products (sku, name, brand_id, category_id, description, price_cents, discount_percent, specs, features, image_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [productSku, name, brandId || null, categoryId || null, description || null, priceCents, discountPercent || 0, specs ? JSON.stringify(specs) : null, features ? JSON.stringify(features) : null, imageUrl || null]
@@ -580,6 +1267,27 @@ app.post('/admin/catalog/products', async (req, res) => {
     
     await conn.query('INSERT INTO inventory (product_id, stock) VALUES (?, ?) ON DUPLICATE KEY UPDATE stock=VALUES(stock)', [productId, Number.isInteger(stock) ? stock : 0]);
     await conn.commit();
+    
+    // Sync to ElasticSearch
+    const [productRows] = await pool.query(
+      `SELECT p.id, p.name, p.description, p.price_cents, p.discount_percent, p.specs, p.features, p.image_url,
+              b.name AS brand, c.name AS category, i.stock, p.brand_id, p.category_id,
+              COALESCE(AVG(pr.rating), 0) AS avg_rating, COUNT(pr.id) AS review_count
+       FROM products p
+       LEFT JOIN brands b ON b.id = p.brand_id
+       LEFT JOIN categories c ON c.id = p.category_id
+       LEFT JOIN inventory i ON i.product_id = p.id
+       LEFT JOIN product_reviews pr ON pr.product_id = p.id
+       WHERE p.id = ?
+       GROUP BY p.id, p.name, p.description, p.price_cents, p.discount_percent, p.specs, p.features, p.image_url,
+                b.name, c.name, i.stock, p.brand_id, p.category_id`,
+      [productId]
+    );
+    if (productRows.length > 0) {
+      parseProductsArray(productRows);
+      await syncProductToES(productRows[0]);
+    }
+    
     return res.status(201).json({ id: productId, sku: productSku });
   } catch (e) {
     await conn.rollback();
@@ -629,6 +1337,27 @@ app.put('/admin/catalog/products/:id', async (req, res) => {
       await conn.query('INSERT INTO inventory (product_id, stock) VALUES (?, ?) ON DUPLICATE KEY UPDATE stock=VALUES(stock)', [id, stock]);
     }
     await conn.commit();
+    
+    // Sync to ElasticSearch
+    const [productRows] = await pool.query(
+      `SELECT p.id, p.name, p.description, p.price_cents, p.discount_percent, p.specs, p.features, p.image_url,
+              b.name AS brand, c.name AS category, i.stock, p.brand_id, p.category_id,
+              COALESCE(AVG(pr.rating), 0) AS avg_rating, COUNT(pr.id) AS review_count
+       FROM products p
+       LEFT JOIN brands b ON b.id = p.brand_id
+       LEFT JOIN categories c ON c.id = p.category_id
+       LEFT JOIN inventory i ON i.product_id = p.id
+       LEFT JOIN product_reviews pr ON pr.product_id = p.id
+       WHERE p.id = ?
+       GROUP BY p.id, p.name, p.description, p.price_cents, p.discount_percent, p.specs, p.features, p.image_url,
+                b.name, c.name, i.stock, p.brand_id, p.category_id`,
+      [id]
+    );
+    if (productRows.length > 0) {
+      parseProductsArray(productRows);
+      await syncProductToES(productRows[0]);
+    }
+    
     return res.json({ ok: true });
   } catch (e) {
     await conn.rollback();
@@ -645,14 +1374,136 @@ app.delete('/admin/catalog/products/:id', async (req, res) => {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    await conn.query('DELETE FROM product_images WHERE product_id = ?', [id]);
-    await conn.query('DELETE FROM inventory WHERE product_id = ?', [id]);
-    await conn.query('DELETE FROM products WHERE id = ?', [id]);
-    await conn.commit();
-    return res.json({ ok: true });
+    
+    // Temporarily disable foreign key checks to avoid constraint issues
+    await conn.query('SET FOREIGN_KEY_CHECKS = 0');
+    
+    try {
+      // Step 1: Get review IDs first
+      const [reviews] = await conn.query('SELECT id FROM product_reviews WHERE product_id = ?', [id]);
+      const reviewIds = reviews.map(r => r.id);
+      
+      // Step 2: Delete review_comments if any reviews exist
+      if (reviewIds.length > 0) {
+        const placeholders = reviewIds.map(() => '?').join(',');
+        await conn.query(`DELETE FROM review_comments WHERE review_id IN (${placeholders})`, reviewIds);
+      }
+      
+      // Step 3: Delete product_reviews
+      await conn.query('DELETE FROM product_reviews WHERE product_id = ?', [id]);
+      
+      // Step 4: Delete product_images
+      await conn.query('DELETE FROM product_images WHERE product_id = ?', [id]);
+      
+      // Step 5: Get variant IDs first
+      const [variants] = await conn.query('SELECT id FROM product_variants WHERE product_id = ?', [id]);
+      const variantIds = variants.map(v => v.id);
+      
+      // Step 6: Delete variant_inventory if any variants exist
+      if (variantIds.length > 0) {
+        const placeholders = variantIds.map(() => '?').join(',');
+        await conn.query(`DELETE FROM variant_inventory WHERE variant_id IN (${placeholders})`, variantIds);
+      }
+      
+      // Step 7: Delete product_variants
+      await conn.query('DELETE FROM product_variants WHERE product_id = ?', [id]);
+      
+      // Step 8: Delete inventory
+      await conn.query('DELETE FROM inventory WHERE product_id = ?', [id]);
+      
+      // Step 9: Delete guest_cart_items (if exists)
+      try {
+        await conn.query('DELETE FROM guest_cart_items WHERE product_id = ?', [id]);
+      } catch (e) {
+        // Table might not exist, ignore
+        console.warn('Could not delete guest_cart_items:', e.message);
+      }
+      
+      // Step 10: Finally delete the product itself
+      await conn.query('DELETE FROM products WHERE id = ?', [id]);
+      
+      // Re-enable foreign key checks
+      await conn.query('SET FOREIGN_KEY_CHECKS = 1');
+      
+      await conn.commit();
+      
+      // Delete from ElasticSearch
+      await deleteProductFromES(id);
+      
+      return res.json({ ok: true });
+    } catch (innerError) {
+      // Re-enable foreign key checks even on error
+      await conn.query('SET FOREIGN_KEY_CHECKS = 1');
+      throw innerError;
+    }
   } catch (e) {
     await conn.rollback();
-    return res.status(500).json({ error: 'Server error' });
+    // Ensure foreign key checks are re-enabled even on error
+    try {
+      await conn.query('SET FOREIGN_KEY_CHECKS = 1');
+    } catch (fkError) {
+      console.warn('Could not re-enable foreign key checks:', fkError.message);
+    }
+    
+    const errorDetails = {
+      message: e.message,
+      code: e.code,
+      sqlState: e.sqlState,
+      sqlMessage: e.sqlMessage,
+      stack: e.stack
+    };
+    
+    console.error('Delete product error:', errorDetails);
+    console.error('Full error object:', e);
+    
+    return res.status(500).json({ 
+      error: 'Server error: ' + (e.message || 'Unknown error'),
+      details: process.env.NODE_ENV === 'development' ? errorDetails : undefined
+    });
+  } finally {
+    conn.release();
+  }
+});
+
+// Admin: create product variant
+app.post('/admin/catalog/products/:productId/variants', async (req, res) => {
+  const { productId } = req.params;
+  const { name, sku, priceCents, discountPercent, imageUrl, attributes, stock, displayOrder } = req.body;
+  
+  if (!name || !priceCents) {
+    return res.status(400).json({ error: 'Missing required fields: name and priceCents' });
+  }
+  
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    
+    // Check if product exists
+    const [[product]] = await conn.query('SELECT id FROM products WHERE id = ?', [productId]);
+    if (!product) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Product not found' });
+    }
+    
+    // Insert variant
+    const variantSku = sku || `VAR${productId}-${Date.now()}`;
+    const [result] = await conn.query(
+      'INSERT INTO product_variants (product_id, name, sku, price_cents, discount_percent, image_url, attributes, display_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [productId, name, variantSku, priceCents, discountPercent || 0, imageUrl || null, attributes ? JSON.stringify(attributes) : null, displayOrder || 0]
+    );
+    const variantId = result.insertId;
+    
+    // Insert variant inventory
+    if (stock !== undefined && stock !== null) {
+      await conn.query('INSERT INTO variant_inventory (variant_id, stock) VALUES (?, ?)', [variantId, stock]);
+    }
+    
+    await conn.commit();
+    return res.status(201).json({ id: variantId, sku: variantSku });
+  } catch (e) {
+    await conn.rollback();
+    console.error('Create variant error:', e);
+    return res.status(500).json({ error: 'Server error: ' + e.message });
   } finally {
     conn.release();
   }
@@ -667,14 +1518,66 @@ app.post('/admin/catalog/products/bulk-delete', async (req, res) => {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    const placeholders = ids.map(() => '?').join(',');
-    await conn.query(`DELETE FROM product_images WHERE product_id IN (${placeholders})`, ids);
-    await conn.query(`DELETE FROM inventory WHERE product_id IN (${placeholders})`, ids);
-    await conn.query(`DELETE FROM products WHERE id IN (${placeholders})`, ids);
-    await conn.commit();
-    return res.json({ ok: true, deletedCount: ids.length });
+    
+    // Temporarily disable foreign key checks
+    await conn.query('SET FOREIGN_KEY_CHECKS = 0');
+    
+    try {
+      const placeholders = ids.map(() => '?').join(',');
+      
+      // Get all review IDs for these products
+      const [allReviews] = await conn.query(`SELECT id FROM product_reviews WHERE product_id IN (${placeholders})`, ids);
+      const reviewIds = allReviews.map(r => r.id);
+      
+      // Delete review_comments
+      if (reviewIds.length > 0) {
+        const reviewPlaceholders = reviewIds.map(() => '?').join(',');
+        await conn.query(`DELETE FROM review_comments WHERE review_id IN (${reviewPlaceholders})`, reviewIds);
+      }
+      
+      // Get all variant IDs
+      const [allVariants] = await conn.query(`SELECT id FROM product_variants WHERE product_id IN (${placeholders})`, ids);
+      const variantIds = allVariants.map(v => v.id);
+      
+      // Delete variant_inventory
+      if (variantIds.length > 0) {
+        const variantPlaceholders = variantIds.map(() => '?').join(',');
+        await conn.query(`DELETE FROM variant_inventory WHERE variant_id IN (${variantPlaceholders})`, variantIds);
+      }
+      
+      // Delete all related data
+      await conn.query(`DELETE FROM product_reviews WHERE product_id IN (${placeholders})`, ids);
+      await conn.query(`DELETE FROM product_images WHERE product_id IN (${placeholders})`, ids);
+      await conn.query(`DELETE FROM product_variants WHERE product_id IN (${placeholders})`, ids);
+      await conn.query(`DELETE FROM inventory WHERE product_id IN (${placeholders})`, ids);
+      
+      // Try to delete guest_cart_items (might not exist)
+      try {
+        await conn.query(`DELETE FROM guest_cart_items WHERE product_id IN (${placeholders})`, ids);
+      } catch (e) {
+        console.warn('Could not delete guest_cart_items:', e.message);
+      }
+      
+      // Finally delete products
+      await conn.query(`DELETE FROM products WHERE id IN (${placeholders})`, ids);
+      
+      // Re-enable foreign key checks
+      await conn.query('SET FOREIGN_KEY_CHECKS = 1');
+      
+      await conn.commit();
+      return res.json({ ok: true, deletedCount: ids.length });
+    } catch (innerError) {
+      // Re-enable foreign key checks even on error
+      await conn.query('SET FOREIGN_KEY_CHECKS = 1');
+      throw innerError;
+    }
   } catch (e) {
     await conn.rollback();
+    try {
+      await conn.query('SET FOREIGN_KEY_CHECKS = 1');
+    } catch (fkError) {
+      console.warn('Could not re-enable foreign key checks:', fkError.message);
+    }
     console.error('Bulk delete error:', e);
     return res.status(500).json({ error: 'Server error: ' + e.message });
   } finally {
@@ -1162,6 +2065,15 @@ app.get('/catalog/products/:id/reviews', async (req, res) => {
       review.comments = comments;
     }
 
+    // Load guest comments (comments without rating from non-logged-in users)
+    const [guestComments] = await pool.query(
+      `SELECT id, product_id, comment, guest_name, created_at
+       FROM guest_comments
+       WHERE product_id = ?
+       ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      [id, limit, offset]
+    );
+
     // Get average rating and total count (ALL reviews, unfiltered)
     const [[stats]] = await pool.query(
       `SELECT AVG(rating) as avg_rating, COUNT(*) as total_reviews
@@ -1188,6 +2100,7 @@ app.get('/catalog/products/:id/reviews', async (req, res) => {
 
     return res.json({
       reviews,
+      guestComments: guestComments || [], // Guest comments (no rating)
       stats: {
         average: stats.avg_rating ? parseFloat(parseFloat(stats.avg_rating).toFixed(1)) : 0,
         total: stats.total_reviews || 0,
@@ -1204,7 +2117,39 @@ app.get('/catalog/products/:id/reviews', async (req, res) => {
   }
 });
 
-// Protected: Submit a review (requires authentication)
+// Public: Submit a guest comment (no authentication required, no rating)
+app.post('/catalog/products/:id/guest-comments', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { comment, guestName } = req.body;
+
+    if (!comment || !comment.trim()) {
+      return res.status(400).json({ error: 'Comment cannot be empty' });
+    }
+
+    // Check if product exists
+    const [[product]] = await pool.query('SELECT id FROM products WHERE id = ?', [id]);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+
+    // Insert guest comment
+    // guest_name is NOT NULL, so use a default value if not provided
+    const name = guestName?.trim() || 'Khách';
+    const [result] = await pool.query(
+      'INSERT INTO guest_comments (product_id, comment, guest_name) VALUES (?, ?, ?)',
+      [id, comment.trim(), name]
+    );
+    
+    // Emit WebSocket event for real-time update
+    emitReviewUpdate(id, { type: 'new_guest_comment', productId: id });
+    
+    return res.json({ message: 'Comment posted', commentId: result.insertId });
+  } catch (e) {
+    console.error('Submit guest comment error:', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Protected: Submit a review (requires authentication for rating)
 app.post('/catalog/products/:id/reviews', async (req, res) => {
   try {
     const { id } = req.params;
@@ -1224,6 +2169,10 @@ app.post('/catalog/products/:id/reviews', async (req, res) => {
       'INSERT INTO product_reviews (product_id, user_id, rating, comment) VALUES (?, ?, ?, ?)',
       [id, userId, rating, comment || null]
     );
+    
+    // Emit WebSocket event for real-time update
+    emitReviewUpdate(id, { type: 'new_review', productId: id });
+    
     return res.json({ message: 'Review created', reviewId: result.insertId });
   } catch (e) {
     console.error('Submit review error:', e);
@@ -1369,6 +2318,7 @@ app.patch('/admin/reviews/:id/reply', async (req, res) => {
 });
 
 // Protected: Post a comment on a review (user or admin)
+// Protected: Add comment to a review
 app.post('/catalog/reviews/:reviewId/comments', async (req, res) => {
   try {
     const { reviewId } = req.params;
@@ -1379,8 +2329,8 @@ app.post('/catalog/reviews/:reviewId/comments', async (req, res) => {
       return res.status(400).json({ error: 'Comment cannot be empty' });
     }
 
-    // Check if review exists
-    const [[review]] = await pool.query('SELECT id FROM product_reviews WHERE id = ?', [reviewId]);
+    // Check if review exists and get product_id
+    const [[review]] = await pool.query('SELECT id, product_id FROM product_reviews WHERE id = ?', [reviewId]);
     if (!review) return res.status(404).json({ error: 'Review not found' });
 
     // Insert comment
@@ -1388,6 +2338,9 @@ app.post('/catalog/reviews/:reviewId/comments', async (req, res) => {
       'INSERT INTO review_comments (review_id, user_id, is_admin, comment) VALUES (?, ?, ?, ?)',
       [reviewId, userId, isAdmin ? 1 : 0, comment.trim()]
     );
+
+    // Emit WebSocket event for real-time update
+    emitReviewUpdate(review.product_id, { type: 'new_comment', reviewId, productId: review.product_id });
 
     return res.json({ message: 'Comment posted', commentId: result.insertId });
   } catch (e) {
@@ -1598,6 +2551,39 @@ async function ensureGuestCartSchema() {
   }
 }
 
+// Admin: sync all products to ElasticSearch
+app.post('/admin/catalog/sync-elasticsearch', async (req, res) => {
+  try {
+    console.log('🔄 Starting full ElasticSearch sync...');
+    
+    // Fetch all products with full data
+    const [products] = await pool.query(
+      `SELECT p.id, p.name, p.description, p.price_cents, p.discount_percent, p.specs, p.features, p.image_url,
+              b.name AS brand, c.name AS category, i.stock, p.brand_id, p.category_id,
+              COALESCE(AVG(pr.rating), 0) AS avg_rating, COUNT(pr.id) AS review_count
+       FROM products p
+       LEFT JOIN brands b ON b.id = p.brand_id
+       LEFT JOIN categories c ON c.id = p.category_id
+       LEFT JOIN inventory i ON i.product_id = p.id
+       LEFT JOIN product_reviews pr ON pr.product_id = p.id
+       GROUP BY p.id, p.name, p.description, p.price_cents, p.discount_percent, p.specs, p.features, p.image_url,
+                b.name, c.name, i.stock, p.brand_id, p.category_id`
+    );
+    
+    parseProductsArray(products);
+    await bulkSyncProductsToES(products);
+    
+    return res.json({ 
+      success: true, 
+      message: `Synced ${products.length} products to ElasticSearch`,
+      count: products.length 
+    });
+  } catch (error) {
+    console.error('Error syncing to ElasticSearch:', error);
+    return res.status(500).json({ error: 'Sync failed: ' + error.message });
+  }
+});
+
 // Connect to Redis on startup
 lockManager.connect().then(() => {
   console.log('✅ Catalog service Redis lock manager ready');
@@ -1606,10 +2592,44 @@ lockManager.connect().then(() => {
   console.warn('⚠️ Service will run WITHOUT distributed locks');
 });
 
+// Initialize ElasticSearch on startup
+initElasticSearchIndex().then(() => {
+  console.log('✅ ElasticSearch initialization completed');
+}).catch(err => {
+  console.error('❌ ElasticSearch initialization failed:', err);
+  console.warn('⚠️ Service will run with MySQL search only');
+});
+
 // Ensure schema on startup
 ensureGuestCartSchema();
 
-app.listen(PORT, () => {
+// Socket.IO connection handling
+io.on('connection', (socket) => {
+  console.log('Client connected:', socket.id);
+  
+  // Join product room to receive updates
+  socket.on('join-product', (productId) => {
+    socket.join(`product-${productId}`);
+    console.log(`Client ${socket.id} joined product-${productId}`);
+  });
+  
+  // Leave product room
+  socket.on('leave-product', (productId) => {
+    socket.leave(`product-${productId}`);
+    console.log(`Client ${socket.id} left product-${productId}`);
+  });
+  
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
+  });
+});
+
+// Helper function to emit review updates
+function emitReviewUpdate(productId, reviewData) {
+  io.to(`product-${productId}`).emit('review-updated', reviewData);
+}
+
+httpServer.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`Catalog service listening on ${PORT}`);
 });

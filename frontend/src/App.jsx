@@ -4,7 +4,6 @@ import ThemeProvider from './ui/ThemeProvider'
 import { ToastProvider } from './ui/Toast'
 import CardNav from './components/Navbar/CardNavbar'
 import Footer from './components/Footer'
-import DockMenu from './components/ui/DockMenu'
 import Home from './pages/Home'
 import Products from './pages/Products'
 import ProductDetail from './pages/ProductDetailPage'
@@ -21,6 +20,7 @@ import ResetPassword from './pages/ResetPassword'
 import Profile from './pages/Profile'
 import Notifications from './pages/Notifications'
 import VNPayReturn from './pages/VNPayReturn'
+import AIChatbot from './components/AIChatbot'
 
 const App = () => {
   const location = useLocation()
@@ -64,7 +64,7 @@ const App = () => {
               </Routes>
             </main>
             {!isAuthPage && location.pathname !== '/' && <Footer />}
-            {!isAuthPage && <DockMenu />}
+            {!isAuthPage && <AIChatbot />}
           </div>
         </ToastProvider>
       </ThemeProvider>

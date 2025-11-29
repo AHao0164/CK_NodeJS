@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS users (
   address_detail TEXT,
   role ENUM('USER','ADMIN') DEFAULT 'USER',
   is_verified TINYINT(1) DEFAULT 0,
+  loyalty_points INT DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX idx_email (email),
@@ -83,6 +84,21 @@ CREATE TABLE IF NOT EXISTS terms_policies (
   version VARCHAR(20) NOT NULL,
   active TINYINT(1) NOT NULL DEFAULT 1,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Loyalty points history
+CREATE TABLE IF NOT EXISTS loyalty_points_history (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  order_id BIGINT,
+  points INT NOT NULL,
+  type ENUM('EARNED','USED','EXPIRED') NOT NULL,
+  description TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_user_id (user_id),
+  INDEX idx_order_id (order_id),
+  INDEX idx_created (created_at)
 );
 
 -- ============================================

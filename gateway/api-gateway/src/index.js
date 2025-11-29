@@ -49,6 +49,8 @@ function authMiddleware(req, res, next) {
     { method: 'GET', path: /^\/uploads\// },
     // Guest cart operations - không yêu cầu đăng nhập
     { method: 'POST', path: /^\/catalog\/guest-cart$/ },
+    // Guest comments - không yêu cầu đăng nhập
+    { method: 'POST', path: /^\/catalog\/products\/\d+\/guest-comments$/ },
     // Guest checkout - không yêu cầu đăng nhập
     { method: 'POST', path: /^\/auth\/guest-signup-and-checkout$/ },
     // VNPay callback không gửi JWT, cần cho phép public
@@ -56,6 +58,14 @@ function authMiddleware(req, res, next) {
     // Guest checkout + VNPay creation không yêu cầu đăng nhập
     { method: 'POST', path: /^\/orders\/checkout$/ },
     { method: 'POST', path: /^\/payment\/vnpay\/create$/ },
+    // Guest coupon validation - không yêu cầu đăng nhập
+    { method: 'GET', path: /^\/orders\/coupons\/[A-Z0-9]{5}$/i },
+    { method: 'POST', path: /^\/coupons\/validate$/ },
+    // AI endpoints - public, không yêu cầu đăng nhập
+    { method: 'POST', path: /^\/catalog\/ai\/chat$/ },
+    { method: 'POST', path: /^\/catalog\/ai\/search-by-image$/ },
+    { method: 'POST', path: /^\/catalog\/ai\/analyze-sentiment$/ },
+    { method: 'POST', path: /^\/catalog\/ai\/recommendations$/ },
   ];
   
   // Protected paths that require authentication (but not admin)

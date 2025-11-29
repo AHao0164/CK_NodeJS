@@ -55,7 +55,7 @@ export default function Cart() {
   
   function detailsOf(id) { return catalog.find(x => x.id === id) }
   
-  const total = cart.items
+  const subtotal = cart.items
     .filter(it => selectedItems.has(it.id))
     .reduce((s, it) => {
       const p = detailsOf(it.product_id)
@@ -64,6 +64,10 @@ export default function Cart() {
       const finalPrice = Math.round(originalPrice * (100 - discountPercent) / 100)
       return s + finalPrice * it.quantity
     }, 0)
+  
+  // Calculate tax (VAT 10%)
+  const tax = Math.round(subtotal * 0.1)
+  const total = subtotal + tax
 
   const toggleSelectItem = (itemId) => {
     setSelectedItems(prev => {
@@ -267,9 +271,19 @@ export default function Cart() {
                   <span className="font-medium text-slate-900 dark:text-slate-100">{selectedItems.size} sản phẩm</span>
                 </div>
                 
-                <div className="border-t border-slate-200 dark:border-slate-700 pt-3 flex justify-between">
-                  <span className="text-slate-700 dark:text-slate-300">Tạm tính</span>
-                  <span className="text-xl font-bold text-slate-900 dark:text-slate-100">{total.toLocaleString('vi-VN')} ₫</span>
+                <div className="border-t border-slate-200 dark:border-slate-700 pt-3 space-y-2">
+                  <div className="flex justify-between text-sm text-slate-600 dark:text-slate-400">
+                    <span>Tạm tính</span>
+                    <span className="text-slate-900 dark:text-slate-100">{subtotal.toLocaleString('vi-VN')} ₫</span>
+                  </div>
+                  <div className="flex justify-between text-sm text-slate-600 dark:text-slate-400">
+                    <span>Thuế VAT (10%)</span>
+                    <span className="text-slate-900 dark:text-slate-100">{tax.toLocaleString('vi-VN')} ₫</span>
+                  </div>
+                  <div className="flex justify-between pt-2 border-t border-slate-200 dark:border-slate-700">
+                    <span className="text-slate-700 dark:text-slate-300 font-medium">Tổng cộng</span>
+                    <span className="text-xl font-bold text-slate-900 dark:text-slate-100">{total.toLocaleString('vi-VN')} ₫</span>
+                  </div>
                 </div>
 
                 <div className="text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800 rounded-lg p-3">

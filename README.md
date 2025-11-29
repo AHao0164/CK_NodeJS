@@ -3697,7 +3697,7 @@ sequenceDiagram
 - [ ] Distributed Tracing (Jaeger)
 - [ ] Service Discovery (Consul)
 - [ ] Message Queue (RabbitMQ/Kafka)
-- [ ] Elasticsearch for product search
+- [x] Elasticsearch for product search
 - [ ] WebSocket cho real-time notifications
 - [ ] CDN cho images
 - [ ] Auto-scaling với Kubernetes

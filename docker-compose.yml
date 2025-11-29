@@ -27,6 +27,24 @@ services:
     volumes:
       - redis-data:/data
 
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+
   phpmyadmin:
     image: phpmyadmin:5
     environment:
@@ -114,12 +132,18 @@ services:
       - DB_DATABASE=catalog_db
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - GEMINI_API_KEY=AIzaSyAqHTvYOWvN_PM_zNqinzXSyBcF-ChpdBA
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
     restart: unless-stopped
+    ports:
+      - "3002:3002"  # Expose port for WebSocket connections
     volumes:
       - ./services/catalog-service/uploads:/app/uploads
       - ./services/catalog-service/src:/app/src:ro
@@ -225,6 +249,8 @@ services:
 
 volumes:
   redis-data:
+    driver: local
+  elasticsearch-data:
     driver: local
 
 networks:
