@@ -17,6 +17,7 @@ import Register from './components/Auth/Register'
 import OTPVerification from './components/Auth/OTPVerification'
 import GoogleCallback from './components/Auth/GoogleCallback'
 import ForgotPassword from './pages/ForgotPassword'
+import ResetPassword from './pages/ResetPassword'
 import Profile from './pages/Profile'
 import Notifications from './pages/Notifications'
 import VNPayReturn from './pages/VNPayReturn'
@@ -25,7 +26,7 @@ const App = () => {
   const location = useLocation()
   
   // Ẩn navbar, footer và dock menu ở trang đăng nhập/đăng ký
-  const isAuthPage = ['/login', '/register', '/signup', '/verify-otp', '/forgot-password', '/auth/callback'].includes(location.pathname)
+  const isAuthPage = ['/login', '/register', '/signup', '/verify-otp', '/forgot-password', '/reset-password', '/auth/callback'].includes(location.pathname)
 
   return (
     <ThemeProvider>
@@ -55,6 +56,7 @@ const App = () => {
                 <Route path="/signup" element={<Register />} />
                 <Route path="/verify-otp" element={<OTPVerification />} />
                 <Route path="/forgot-password" element={<ForgotPassword />} />
+                <Route path="/reset-password" element={<ResetPassword />} />
                 <Route path="/auth/callback" element={<GoogleCallback />} />
                 <Route path="/profile" element={<Profile />} />
                 <Route path="/notifications" element={<Notifications />} />

@@ -32,17 +32,30 @@ function authMiddleware(req, res, next) {
   const publicPaths = [
     { method: 'POST', path: /^\/auth\/signup$/ },
     { method: 'POST', path: /^\/auth\/login$/ },
+    { method: 'POST', path: /^\/auth\/ensure-guest$/ },
     { method: 'POST', path: /^\/auth\/send-otp$/ },
     { method: 'POST', path: /^\/auth\/verify-otp$/ },
     { method: 'POST', path: /^\/auth\/resend-otp$/ },
     { method: 'POST', path: /^\/auth\/forgot-password$/ },
     { method: 'POST', path: /^\/auth\/reset-password$/ },
+    { method: 'POST', path: /^\/auth\/verify-reset-otp$/ },
+    { method: 'GET', path: /^\/auth\/verify-reset-token/ },
     { method: 'GET', path: /^\/auth\/google/ },
+    { method: 'GET', path: /^\/auth\/facebook/ },
     { method: 'GET', path: /^\/auth\/terms-conditions$/ },
     { method: 'GET', path: /^\/auth\/privacy-policy$/ },
     { method: 'GET', path: /^\/health$/ },
     { method: 'GET', path: /^\/catalog\// },
     { method: 'GET', path: /^\/uploads\// },
+    // Guest cart operations - không yêu cầu đăng nhập
+    { method: 'POST', path: /^\/catalog\/guest-cart$/ },
+    // Guest checkout - không yêu cầu đăng nhập
+    { method: 'POST', path: /^\/auth\/guest-signup-and-checkout$/ },
+    // VNPay callback không gửi JWT, cần cho phép public
+    { method: 'GET', path: /^\/payment\/vnpay\/return/ },
+    // Guest checkout + VNPay creation không yêu cầu đăng nhập
+    { method: 'POST', path: /^\/orders\/checkout$/ },
+    { method: 'POST', path: /^\/payment\/vnpay\/create$/ },
   ];
   
   // Protected paths that require authentication (but not admin)
@@ -51,6 +64,33 @@ function authMiddleware(req, res, next) {
     { method: 'POST', path: /^\/catalog\/reviews\/\d+\/comments$/ },
     { method: 'GET', path: /^\/catalog\/products\/reviews\/user\/\d+$/ }
   ];
+  
+  // Known API paths that should be handled by services
+  const knownApiPaths = [
+    /^\/auth\//,
+    /^\/catalog\//,
+    /^\/cart(\/|$)/,  // Match /cart or /cart/
+    /^\/orders(\/|$)/, // Match /orders or /orders/...
+    /^\/payment\//,
+    /^\/admin\//,
+    /^\/uploads\//,
+    /^\/health$/
+  ];
+  
+  // Facebook SDK paths - ignore these requests (return 200 to avoid console errors)
+  const facebookSdkPaths = [
+    /^\/data\/manifest/,
+    /^\/ajax\/bz/,
+    /^\/ajax\/webstorage/,
+    /^\/\.well-known\//
+  ];
+  
+  // Check if this is a Facebook SDK request
+  const isFacebookSdkRequest = facebookSdkPaths.some(pattern => pattern.test(req.path));
+  if (isFacebookSdkRequest) {
+    // Return 200 OK to avoid console errors, but don't process
+    return res.status(200).json({});
+  }
   
   const isPublic = publicPaths.some(
     (r) => r.method === req.method && r.path.test(req.path)
@@ -61,8 +101,11 @@ function authMiddleware(req, res, next) {
     (r) => r.method === req.method && r.path.test(req.path)
   );
   
-  // For protected or other authenticated paths
-  if (isProtected || !isPublic) {
+  // Check if this is a known API path
+  const isKnownApiPath = knownApiPaths.some(pattern => pattern.test(req.path));
+  
+  // For protected or other authenticated paths (cart requires auth but is handled by cart-service)
+  if (isProtected || (isKnownApiPath && !isPublic)) {
     const authHeader = req.headers.authorization || '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
     if (!token) return res.status(401).json({ error: 'Missing token' });
@@ -73,6 +116,11 @@ function authMiddleware(req, res, next) {
     } catch (e) {
       return res.status(401).json({ error: 'Invalid token' });
     }
+  }
+  
+  // For unknown paths (like Facebook SDK requests), return 404 instead of 401
+  if (!isKnownApiPath) {
+    return res.status(404).json({ error: 'Not Found', message: 'Endpoint không tồn tại' });
   }
   
   return next();
@@ -159,7 +207,9 @@ async function proxy(req, res, baseUrl) {
     if (req.user && req.user.role) {
       headers['x-user-role'] = String(req.user.role);
     }
-    const response = await axios({
+    
+    // Use axios with maxRedirects: 0 to handle redirects manually (like gateway1)
+    const axiosConfig = {
       url,
       method: req.method,
       headers,
@@ -167,9 +217,25 @@ async function proxy(req, res, baseUrl) {
       // Use arraybuffer to support both JSON and binary (images) transparently
       responseType: 'arraybuffer',
       validateStatus: () => true,
-      timeout: 30000, // 30 seconds timeout
-    });
-    res.status(response.status).set(response.headers).send(response.data);
+      maxRedirects: 0, // Don't follow redirects automatically
+    };
+    
+    try {
+      const response = await axios(axiosConfig);
+      
+      // Handle redirects manually - pass them through to the client (like gateway1)
+      if (response.status >= 300 && response.status < 400 && response.headers.location) {
+        return res.redirect(response.status, response.headers.location);
+      }
+      
+      res.status(response.status).set(response.headers).send(response.data);
+    } catch (err) {
+      // Handle redirect errors from axios (like gateway1)
+      if (err.response && err.response.status >= 300 && err.response.status < 400) {
+        return res.redirect(err.response.status, err.response.headers.location);
+      }
+      throw err; // Re-throw to be handled by outer catch
+    }
   } catch (err) {
     console.error(`Gateway proxy error [${baseUrl}]:`, err.message);
     const serviceName = getServiceName(baseUrl);

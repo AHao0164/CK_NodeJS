@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { FaCartPlus, FaHeadset, FaHeart, FaShare, FaStar, FaChevronLeft, FaChevronRight, FaRegStar } from 'react-icons/fa';
-import { addItemToCart } from '../../services/cart';
+import { addItemToCart, addGuestItemToCart } from '../../services/cart';
 import { getProductById } from '../../services/catalog';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
@@ -375,18 +375,41 @@ const ProductDetail = () => {
 
   const handleAddToCart = async () => {
     if (!product) return;
-    if (!token) {
-      navigate('/login');
+    
+    // Đã đăng nhập: thêm vào giỏ hàng của user
+    if (token) {
+      try {
+        setError('');
+        setLoading(true);
+        await addItemToCart(api, { productId: product.id, quantity, priceCents: product.price_cents || product.price });
+        await refreshCart();
+        toast.show('✓ Đã thêm vào giỏ hàng', { type: 'success' });
+      } catch (e) {
+        setError(e.message || 'Lỗi khi thêm vào giỏ hàng');
+      } finally {
+        setLoading(false);
+      }
       return;
     }
+
+    // Khách chưa đăng nhập: thêm vào guest cart
     try {
       setError('');
       setLoading(true);
-      await addItemToCart(api, { productId: product.id, quantity, priceCents: product.price_cents || product.price });
-      await refreshCart();
-      toast.show('✓ Đã thêm vào giỏ hàng', { type: 'success' });
+      let guestCartId = sessionStorage.getItem('guestCartId');
+      const { guestCartId: newGuestCartId, items } = await addGuestItemToCart({
+        guestCartId,
+        productId: product.id,
+        quantity,
+        priceCents: product.price_cents || product.price
+      });
+      sessionStorage.setItem('guestCartId', newGuestCartId);
+      sessionStorage.setItem('guestCartItems', JSON.stringify(items));
+      await refreshCart(); // Refresh cart count (sẽ load từ sessionStorage)
+      toast.show('✓ Đã thêm vào giỏ hàng (khách)', { type: 'success' });
     } catch (e) {
-      setError(e.message || 'Lỗi khi thêm vào giỏ hàng');
+      setError(e.message || 'Lỗi khi thêm vào giỏ hàng khách');
+      toast.show(e.message || 'Lỗi khi thêm vào giỏ hàng khách', { type: 'error' });
     } finally {
       setLoading(false);
     }
@@ -394,19 +417,39 @@ const ProductDetail = () => {
 
   const handleBuyNow = async () => {
     if (!product) return;
-    if (!token) {
-      navigate('/login');
+
+    // Đã đăng nhập: hành vi cũ - thêm vào giỏ và chuyển sang trang giỏ hàng
+    if (token) {
+      try {
+        setError('');
+        setLoading(true);
+        await addItemToCart(api, { productId: product.id, quantity, priceCents: product.price_cents || product.price });
+        await refreshCart();
+        navigate('/cart');
+      } catch (e) {
+        setError(e.message || 'Lỗi khi thêm vào giỏ hàng');
+        setLoading(false);
+      }
       return;
     }
+
+    // Khách chưa đăng nhập: chuyển thẳng tới trang thanh toán với thông tin sản phẩm
     try {
       setError('');
-      setLoading(true);
-      await addItemToCart(api, { productId: product.id, quantity, priceCents: product.price_cents || product.price });
-      await refreshCart();
-      navigate('/cart');
+      const priceCents = product.originalPrice || product.price_cents || product.price;
+      navigate('/checkout', {
+        state: {
+          guestItems: [
+            {
+              productId: product.id,
+              quantity,
+              priceCents
+            }
+          ]
+        }
+      });
     } catch (e) {
-      setError(e.message || 'Lỗi khi thêm vào giỏ hàng');
-      setLoading(false);
+      setError(e.message || 'Không thể chuyển tới trang thanh toán');
     }
   };
 

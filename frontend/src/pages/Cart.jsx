@@ -10,7 +10,7 @@ import { motion } from 'framer-motion'
 import VI from '../constants/vi'
 
 export default function Cart() {
-  const { api } = useAuth()
+  const { api, token } = useAuth()
   const { refreshCart } = useCart()
   const navigate = useNavigate()
   const [cart, setCart] = useState({ id: null, items: [] })
@@ -18,21 +18,40 @@ export default function Cart() {
   const [selectedItems, setSelectedItems] = useState(new Set())
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [guestCartId, setGuestCartId] = useState(null)
   
   const loadCart = async () => {
-    const [c, p] = await Promise.all([
-      fetchCart(api),
-      listProducts()
-    ])
-    setCart(c)
-    setCatalog(Array.isArray(p?.items) ? p.items : [])
+    if (token && api) {
+      // Logged in user: load from API
+      const [c, p] = await Promise.all([
+        fetchCart(api),
+        listProducts()
+      ])
+      setCart(c)
+      setCatalog(Array.isArray(p?.items) ? p.items : [])
+    } else {
+      // Guest user: load from sessionStorage
+      const storedGuestCartId = sessionStorage.getItem('guestCartId')
+      const storedGuestCartItems = JSON.parse(sessionStorage.getItem('guestCartItems') || '[]')
+      setGuestCartId(storedGuestCartId)
+      // Map guest cart items to match cart structure (with id, product_id, quantity)
+      const mappedItems = storedGuestCartItems.map((item, idx) => ({
+        id: item.id || idx + 1, // Use item.id if exists, otherwise use index
+        product_id: item.product_id || item.productId,
+        quantity: item.quantity || 1,
+        price_cents: item.price_cents || item.priceCents
+      }))
+      setCart({ id: storedGuestCartId, items: mappedItems })
+      const p = await listProducts()
+      setCatalog(Array.isArray(p?.items) ? p.items : [])
+    }
   }
 
   useEffect(() => {
     document.title = 'Giỏ hàng - GearUp';
   }, []);
   
-  useEffect(() => { loadCart() }, [api])
+  useEffect(() => { loadCart() }, [api, token])
   
   function detailsOf(id) { return catalog.find(x => x.id === id) }
   
@@ -71,11 +90,33 @@ export default function Cart() {
 
   const confirmDelete = async () => {
     try {
-      if (deleteTarget === 'selected') {
-        await Promise.all([...selectedItems].map(itemId => removeCartItem(api, { itemId })))
-        setSelectedItems(new Set())
-      } else if (deleteTarget) {
-        await removeCartItem(api, { itemId: deleteTarget })
+      if (token && api) {
+        // Logged in user: remove from API
+        if (deleteTarget === 'selected') {
+          await Promise.all([...selectedItems].map(itemId => removeCartItem(api, { itemId })))
+          setSelectedItems(new Set())
+        } else if (deleteTarget) {
+          await removeCartItem(api, { itemId: deleteTarget })
+        }
+      } else {
+        // Guest user: remove from sessionStorage
+        const storedGuestCartItems = JSON.parse(sessionStorage.getItem('guestCartItems') || '[]')
+        let updatedItems
+        if (deleteTarget === 'selected') {
+          updatedItems = storedGuestCartItems.filter(item => {
+            const itemId = item.id || storedGuestCartItems.indexOf(item) + 1
+            return !selectedItems.has(itemId)
+          })
+          setSelectedItems(new Set())
+        } else if (deleteTarget) {
+          updatedItems = storedGuestCartItems.filter(item => {
+            const itemId = item.id || storedGuestCartItems.indexOf(item) + 1
+            return itemId !== deleteTarget
+          })
+        } else {
+          updatedItems = storedGuestCartItems
+        }
+        sessionStorage.setItem('guestCartItems', JSON.stringify(updatedItems))
       }
       await loadCart()
       await refreshCart()
@@ -95,7 +136,21 @@ export default function Cart() {
   const handleUpdateQuantity = async (itemId, quantity) => {
     if (quantity < 1) return
     try {
-      await updateCartItemQuantity(api, { itemId, quantity })
+      if (token && api) {
+        // Logged in user: update via API
+        await updateCartItemQuantity(api, { itemId, quantity })
+      } else {
+        // Guest user: update in sessionStorage
+        const storedGuestCartItems = JSON.parse(sessionStorage.getItem('guestCartItems') || '[]')
+        const updatedItems = storedGuestCartItems.map(item => {
+          const currentItemId = item.id || storedGuestCartItems.indexOf(item) + 1
+          if (currentItemId === itemId) {
+            return { ...item, quantity }
+          }
+          return item
+        })
+        sessionStorage.setItem('guestCartItems', JSON.stringify(updatedItems))
+      }
       await loadCart()
       await refreshCart()
     } catch (e) {

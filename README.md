@@ -14,6 +14,31 @@
 
 ---
 
+## ⚡ Quick Start
+
+```bash
+# 1. Clone repository
+git clone https://github.com/huynhdai5656/Laptop.git
+cd Laptop
+
+# 2. Khởi chạy Docker
+docker-compose up -d --build
+
+# 3. Đợi 30 giây, sau đó seed data
+cd tools/seed && npm install && node seed.js
+
+# 4. Truy cập ứng dụng
+# - Customer: http://localhost:5173
+# - Admin: http://localhost:5174
+# - API: http://localhost:8080
+```
+
+**Tài khoản mặc định:**
+- Admin: `tenho051512@gmail.com` / `admin123456`
+- User: `user1@example.com` / `123456`
+
+---
+
 ## 🎯 Giới Thiệu
 
 **GearUp** là hệ thống thương mại điện tử chuyên bán laptop, linh kiện PC và phụ kiện gaming. Dự án được xây dựng theo kiến trúc **Microservices** với các công nghệ hiện đại.
@@ -114,6 +139,10 @@ GET    /health           - Health check
 - Password hashing (bcrypt, salt rounds: 10)
 - Rate limiting: 5 attempts / 5 phút
 - Role: USER, ADMIN
+- Google OAuth login
+- Facebook OAuth login
+- Forgot password (OTP-based và token-based)
+- Email verification với OTP
 
 #### 2️⃣ Catalog Service (Port 3002)
 **Chức năng:** Quản lý sản phẩm, categories, brands, inventory, reviews
@@ -408,65 +437,327 @@ Values:
 ## 🚀 Hướng Dẫn Cài Đặt
 
 ### Yêu Cầu
-- Docker Desktop 4.25+
-- RAM: 8GB+ (khuyến nghị 16GB)
-- Disk: 10GB trống
+- **Docker Desktop 4.25+** (hoặc Docker Engine 24.0+ với Docker Compose v2)
+- **RAM:** 8GB+ (khuyến nghị 16GB)
+- **Disk:** 10GB trống
+- **OS:** Windows 10/11, macOS, hoặc Linux
 
-### Bước 1: Clone & Start
+### Bước 1: Clone Repository
 ```bash
 git clone https://github.com/huynhdai5656/Laptop.git
 cd Laptop
-
-# Start all services
-docker-compose up -d
 ```
 
-**⚠️ LƯU Ý:** Nếu `auth-service` hoặc `order-service` bị lỗi khi khởi động lần đầu, chạy lệnh sau để restart:
+### Bước 2: Kiểm Tra Docker
 ```bash
-docker-compose restart auth-service order-service
+# Kiểm tra Docker đã cài đặt
+docker --version
+docker-compose --version
+
+# Kiểm tra Docker đang chạy
+docker ps
+```
+
+### Bước 3: Khởi Chạy Hệ Thống
+
+#### Cách 1: Khởi chạy tất cả services (Khuyến nghị)
+```bash
+# Build và start tất cả containers
+docker-compose up -d --build
+
+# Xem logs real-time
+docker-compose logs -f
+```
+
+#### Cách 2: Khởi chạy từng bước
+```bash
+# Bước 1: Start infrastructure (MySQL, Redis)
+docker-compose up -d mysql redis
+
+# Đợi 30 giây để MySQL khởi tạo database
+# Sau đó start các services
+docker-compose up -d auth-service catalog-service cart-service order-service payment-service
+
+# Cuối cùng start gateway và frontend
 docker-compose up -d api-gateway frontend adminapp
 ```
 
-Điều này xảy ra do MySQL cần ~20-30 giây để khởi tạo hoàn toàn. Services sẽ tự động kết nối thành công sau khi restart.
-
-### Bước 2: Kiểm Tra
+**⚠️ LƯU Ý QUAN TRỌNG:**
+- MySQL cần **~20-30 giây** để khởi tạo database hoàn toàn
+- Nếu `auth-service` hoặc `order-service` bị lỗi khi khởi động lần đầu, đây là bình thường
+- Chạy lệnh sau để restart các services sau khi MySQL sẵn sàng:
 ```bash
-# Check services
-docker-compose ps
-
-# Health check
-curl http://localhost:8080/health
+docker-compose restart auth-service order-service catalog-service cart-service
+docker-compose up -d api-gateway frontend adminapp
 ```
 
-Tất cả 11 containers phải có status `Up` và `healthy` (trừ frontend/adminapp không có healthcheck).
+### Bước 4: Kiểm Tra Trạng Thái
 
-### Bước 3: Seed Data
+#### Kiểm tra containers
 ```bash
+# Xem tất cả containers
+docker-compose ps
+
+# Kết quả mong đợi:
+# - mysql: Up (healthy)
+# - redis: Up (healthy)
+# - phpmyadmin: Up
+# - auth-service: Up (healthy)
+# - catalog-service: Up (healthy)
+# - cart-service: Up (healthy)
+# - order-service: Up (healthy)
+# - payment-service: Up (healthy)
+# - api-gateway: Up
+# - frontend: Up
+# - adminapp: Up
+```
+
+#### Health check
+```bash
+# Kiểm tra API Gateway
+curl http://localhost:8080/health
+
+# Kiểm tra từng service
+curl http://localhost:3001/health  # Auth
+curl http://localhost:3002/health  # Catalog
+curl http://localhost:3003/health  # Cart
+curl http://localhost:3004/health  # Order
+curl http://localhost:3005/health  # Payment
+```
+
+#### Xem logs nếu có lỗi
+```bash
+# Logs của tất cả services
+docker-compose logs
+
+# Logs của service cụ thể
+docker-compose logs auth-service
+docker-compose logs order-service
+docker-compose logs mysql
+
+# Logs real-time
+docker-compose logs -f auth-service
+```
+
+### Bước 5: Seed Data (Dữ Liệu Mẫu)
+
+```bash
+# Vào thư mục seed
 cd tools/seed
+
+# Cài đặt dependencies
 npm install
+
+# Chạy seed script
 node seed.js
 ```
 
 **Seed tạo:**
-- ✅ 2 users: user1@example.com, hoten051512@gmail.com
-- ✅ 35+ brands
-- ✅ 16 categories
-- ✅ 60+ products
-- ✅ 6 banners
-- ✅ Demo orders
+- ✅ **2 users:** user1@example.com, hoten051512@gmail.com
+- ✅ **1 admin:** tenho051512@gmail.com (password: admin123456)
+- ✅ **35+ brands** (Apple, ASUS, MSI, Lenovo, Dell...)
+- ✅ **16 categories** (Laptop, PC Components, Gaming Gear...)
+- ✅ **60+ products** với đầy đủ thông tin
+- ✅ **6 banners** cho trang chủ
+- ✅ **Demo orders** để test
 
-### Bước 4: Truy Cập
+### Bước 6: Truy Cập Ứng Dụng
 
-| Service | URL | 
-|---------|-----|
-| Customer Web | http://localhost:5173 |
-| Admin Dashboard | http://localhost:5174 |
-| API Gateway | http://localhost:8080 |
+| Service | URL | Mô tả |
+|---------|-----|-------|
+| **Customer Web** | http://localhost:5173 | Trang web khách hàng |
+| **Admin Dashboard** | http://localhost:5174 | Trang quản trị |
+| **API Gateway** | http://localhost:8080 | API Gateway (health check) |
+| **phpMyAdmin** | http://localhost:8081 | Quản lý MySQL database |
 
-### Dừng Hệ Thống
+### Bước 7: Đăng Nhập
+
+#### Admin Account
+```
+Email: tenho051512@gmail.com
+Password: admin123456
+URL: http://localhost:5174
+```
+
+#### User Accounts
+```
+Email: user1@example.com
+Password: 123456
+
+Email: hoten051512@gmail.com
+Password: 123456
+```
+
+### Quản Lý Hệ Thống
+
+#### Dừng hệ thống
 ```bash
-docker-compose down      # Stop
-docker-compose down -v   # Stop + xóa data
+# Dừng tất cả containers (giữ data)
+docker-compose stop
+
+# Dừng và xóa containers (giữ data)
+docker-compose down
+
+# Dừng và xóa TẤT CẢ (containers + volumes + networks)
+docker-compose down -v
+```
+
+#### Restart services
+```bash
+# Restart tất cả
+docker-compose restart
+
+# Restart service cụ thể
+docker-compose restart auth-service
+docker-compose restart order-service
+```
+
+#### Rebuild containers (khi code thay đổi)
+```bash
+# Rebuild và restart
+docker-compose up -d --build
+
+# Rebuild service cụ thể
+docker-compose build auth-service
+docker-compose up -d auth-service
+```
+
+#### Xóa và khởi tạo lại từ đầu
+```bash
+# ⚠️ CẢNH BÁO: Xóa tất cả data
+docker-compose down -v
+docker-compose up -d --build
+# Sau đó chạy lại seed.js
+```
+
+### Troubleshooting
+
+#### Lỗi: Port đã được sử dụng
+```bash
+# Kiểm tra port nào đang được dùng
+netstat -ano | findstr :8080  # Windows
+lsof -i :8080                  # macOS/Linux
+
+# Thay đổi port trong docker-compose.yml nếu cần
+```
+
+#### Lỗi: MySQL connection refused
+```bash
+# Đợi MySQL khởi động hoàn toàn (30 giây)
+docker-compose logs mysql
+
+# Restart services sau khi MySQL ready
+docker-compose restart auth-service order-service catalog-service cart-service
+```
+
+#### Lỗi: Redis connection failed
+```bash
+# Kiểm tra Redis
+docker-compose logs redis
+docker exec -it gear-redis-1 redis-cli ping
+# Kết quả: PONG
+```
+
+#### Lỗi: Frontend không load được API
+```bash
+# Kiểm tra API Gateway
+curl http://localhost:8080/health
+
+# Kiểm tra biến môi trường frontend
+docker-compose exec frontend env | grep VITE_API_BASE
+```
+
+#### Xem logs chi tiết
+```bash
+# Tất cả logs
+docker-compose logs --tail=100
+
+# Logs của service cụ thể
+docker-compose logs --tail=50 auth-service
+
+# Logs real-time
+docker-compose logs -f --tail=20
+```
+
+### Cấu Hình Nâng Cao
+
+#### Payment Service (.env file)
+File `.env` đã được tạo tự động với giá trị mặc định (DEMO mode). Nếu cần cấu hình VNPAY thật, chỉnh sửa file `services/payment-service/.env`:
+```env
+VNPAY_TMN_CODE=your_tmn_code
+VNPAY_HASH_SECRET=your_hash_secret
+VNPAY_URL=https://sandbox.vnpayment.vn/paymentv2/vpcpay.html
+VNPAY_RETURN_URL=http://localhost:5173/payment/vnpay-return
+ORDER_SERVICE_URL=http://order-service:3004
+```
+
+**Lưu ý:** 
+- File `.env` đã được tạo sẵn với giá trị DEMO
+- Service sẽ chạy bình thường với giá trị mặc định nếu không có file này
+- Để sử dụng VNPAY thật, cần đăng ký tài khoản VNPAY và cập nhật các giá trị trên
+
+#### OAuth Configuration (Google & Facebook Login)
+
+Để sử dụng đăng nhập Google và Facebook, cần cấu hình các biến môi trường:
+
+**1. Tạo file `.env` ở thư mục gốc (hoặc cập nhật docker-compose.yml):**
+```env
+GOOGLE_CLIENT_ID=your_google_client_id
+GOOGLE_CLIENT_SECRET=your_google_client_secret
+FACEBOOK_APP_ID=your_facebook_app_id
+FACEBOOK_APP_SECRET=your_facebook_app_secret
+```
+
+**2. Hoặc cập nhật trực tiếp trong `docker-compose.yml`:**
+```yaml
+auth-service:
+  environment:
+    - GOOGLE_CLIENT_ID=your_google_client_id
+    - GOOGLE_CLIENT_SECRET=your_google_client_secret
+    - GOOGLE_CALLBACK_URL=http://localhost:8080/auth/google/callback
+    - FACEBOOK_APP_ID=your_facebook_app_id
+    - FACEBOOK_APP_SECRET=your_facebook_app_secret
+    - FACEBOOK_CALLBACK_URL=http://localhost:8080/auth/facebook/callback
+```
+
+**3. Cấu hình OAuth Providers:**
+
+**Google OAuth:**
+1. Truy cập [Google Cloud Console](https://console.cloud.google.com/)
+2. Tạo project mới hoặc chọn project hiện có
+3. Enable Google+ API
+4. Tạo OAuth 2.0 Client ID
+5. Thêm Authorized redirect URIs: `http://localhost:8080/auth/google/callback`
+6. Copy Client ID và Client Secret vào biến môi trường
+
+**Facebook OAuth:**
+1. Truy cập [Facebook Developers](https://developers.facebook.com/)
+2. Tạo App mới
+3. Thêm Facebook Login product
+4. Cấu hình Valid OAuth Redirect URIs: `http://localhost:8080/auth/facebook/callback`
+5. Copy App ID và App Secret vào biến môi trường
+
+**Lưu ý:**
+- Nếu không cấu hình OAuth, các nút Google/Facebook sẽ không hoạt động nhưng hệ thống vẫn chạy bình thường
+- OAuth chỉ hoạt động khi có đầy đủ Client ID và Secret
+- Trong production, cần cập nhật callback URLs với domain thật
+
+#### Thay đổi port
+Sửa file `docker-compose.yml`:
+```yaml
+ports:
+  - "8080:8080"  # Thay đổi port bên trái (host port)
+```
+
+#### Tăng memory limit
+Thêm vào `docker-compose.yml`:
+```yaml
+services:
+  mysql:
+    deploy:
+      resources:
+        limits:
+          memory: 2G
 ```
 
 ---

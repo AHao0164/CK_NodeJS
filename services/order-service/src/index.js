@@ -18,6 +18,7 @@ const lockManager = new RedisLockManager();
 const PORT = process.env.PORT || 3004;
 const PAYMENT_SERVICE_URL = process.env.PAYMENT_SERVICE_URL || 'http://localhost:3005';
 const CATALOG_SERVICE_URL = process.env.CATALOG_SERVICE_URL || 'http://localhost:3002';
+const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://localhost:3001';
 
 // Configure axios with timeout and retry
 const httpClient = axios.create({
@@ -99,6 +100,23 @@ pool.on('connection', (connection) => {
   connection.query("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
 });
 
+// Wait for database to be ready
+async function waitForDatabase(maxRetries = 30, delay = 1000) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const conn = await pool.getConnection();
+      await conn.ping();
+      conn.release();
+      console.log('Database connection established');
+      return true;
+    } catch (err) {
+      console.log(`Waiting for database... attempt ${i + 1}/${maxRetries}`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  throw new Error('Could not connect to database after maximum retries');
+}
+
 // Ensure new schema pieces exist even on old DBs
 async function ensureSchema() {
   const conn = await pool.getConnection();
@@ -162,14 +180,46 @@ async function ensureSchema() {
   }
 }
 
-ensureSchema();
+// Initialize database and schema
+async function initializeService() {
+  try {
+    await waitForDatabase();
+    await ensureSchema();
+  } catch (err) {
+    console.error('Failed to initialize service:', err);
+    process.exit(1);
+  }
+}
+
+initializeService();
+
+// Helper: ensure we have a user id for guest checkout (create or reuse account based on email)
+async function ensureUserForGuest(shipping) {
+  if (!shipping || !shipping.email) {
+    throw new Error('Email is required for guest checkout');
+  }
+
+  const payload = {
+    email: shipping.email,
+    fullName: shipping.name || null,
+    phone: shipping.phone || null,
+    province: shipping.province || null,
+    ward: shipping.ward || null,
+    addressDetail: shipping.address || null
+  };
+
+  const { data } = await httpClient.post(`${AUTH_SERVICE_URL}/auth/ensure-guest`, payload);
+  if (!data || !data.id) {
+    throw new Error('Failed to ensure guest account');
+  }
+  return data.id;
+}
 
 app.post('/orders/checkout', async (req, res) => {
   const userIdHeader = req.headers['x-user-id'];
-  const userId = userIdHeader ? parseInt(userIdHeader, 10) : null;
+  const authenticatedUserId = userIdHeader ? parseInt(userIdHeader, 10) : null;
   const { items, shipping = {}, paymentMethod = 'COD', couponCode } = req.body;
   const errors = [];
-  if (!userId) errors.push('Unauthorized');
   if (!Array.isArray(items) || items.length === 0) errors.push('Giỏ hàng trống');
   if (Array.isArray(items)) {
     for (const it of items) {
@@ -184,9 +234,29 @@ app.post('/orders/checkout', async (req, res) => {
     console.log('Shipping validation failed:', JSON.stringify(shipping, null, 2));
     errors.push('Thiếu thông tin địa chỉ giao hàng');
   }
+  // Guest checkout: must provide at least an email to tie orders to an account
+  if (!authenticatedUserId && !shipping.email) {
+    errors.push('Email bắt buộc cho khách chưa đăng nhập');
+  }
+
   if (errors.length) {
     console.log('Validation errors:', errors);
     return res.status(400).json({ error: 'VALIDATION_ERROR', details: errors });
+  }
+  
+  let userId = authenticatedUserId;
+
+  // If not authenticated, auto-create or reuse an account based on email
+  if (!userId) {
+    try {
+      userId = await ensureUserForGuest(shipping);
+    } catch (err) {
+      console.error('ensureUserForGuest error:', err.message);
+      return res.status(500).json({ 
+        error: 'GUEST_ACCOUNT_ERROR',
+        message: 'Không thể tạo tài khoản cho khách. Vui lòng thử lại hoặc đăng nhập.'
+      });
+    }
   }
   
   // 🔒 CRITICAL: Prevent duplicate orders from multiple clicks

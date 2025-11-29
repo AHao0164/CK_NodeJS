@@ -1,14 +1,3 @@
--- ============================================
--- GEARUP MICROSERVICES - UNIFIED INIT SCRIPT
--- ============================================
--- Auto-generated from service schemas
--- Date: 2025-11-23
--- ============================================
-
--- ============================================
--- AUTH SERVICE DATABASE
--- ============================================
-
 CREATE DATABASE IF NOT EXISTS auth_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE auth_db;
 
@@ -16,7 +5,7 @@ USE auth_db;
 CREATE TABLE IF NOT EXISTS users (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   email VARCHAR(255) NOT NULL UNIQUE,
-  password_hash VARCHAR(255) NOT NULL,
+  password_hash VARCHAR(255) DEFAULT NULL,
   full_name VARCHAR(255),
   phone VARCHAR(20),
   province VARCHAR(100),
@@ -24,10 +13,13 @@ CREATE TABLE IF NOT EXISTS users (
   address_detail TEXT,
   role ENUM('USER','ADMIN') DEFAULT 'USER',
   is_verified TINYINT(1) DEFAULT 0,
+  oauth_provider VARCHAR(50) DEFAULT NULL,
+  oauth_id VARCHAR(255) DEFAULT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX idx_email (email),
-  INDEX idx_role (role)
+  INDEX idx_role (role),
+  INDEX idx_oauth (oauth_provider, oauth_id)
 );
 
 -- OTP verification table
@@ -56,6 +48,20 @@ CREATE TABLE IF NOT EXISTS otp_codes (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   UNIQUE KEY unique_user_type (user_id, type),
   INDEX idx_email (email),
+  INDEX idx_expires (expires_at)
+);
+
+-- Password reset tokens table (for token-based password reset)
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  token VARCHAR(255) NOT NULL UNIQUE,
+  expires_at TIMESTAMP NOT NULL,
+  used TINYINT(1) DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_token (token),
+  INDEX idx_user_id (user_id),
   INDEX idx_expires (expires_at)
 );
 

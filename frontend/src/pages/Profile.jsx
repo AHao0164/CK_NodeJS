@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { getCurrentUser } from '../services/auth'
+import { getCurrentUser, getAddresses, createAddress, deleteAddress, setDefaultAddress } from '../services/auth'
 import { motion } from 'framer-motion'
 import { useToast } from '../ui/Toast'
 import { getProvinces, getWards } from '../constants/vietnamLocations'
@@ -21,6 +21,16 @@ export default function Profile() {
     ward: '',
     address_detail: ''
   })
+  const [addresses, setAddresses] = useState([])
+  const [addrLoading, setAddrLoading] = useState(false)
+  const [addrForm, setAddrForm] = useState({
+    fullName: '',
+    phone: '',
+    province: '',
+    ward: '',
+    addressDetail: ''
+  })
+  const [isAddingAddress, setIsAddingAddress] = useState(false)
   const [pw, setPw] = useState({ current: '', next: '' })
   const [saving, setSaving] = useState(false)
 
@@ -30,19 +40,149 @@ export default function Profile() {
 
   useEffect(() => {
     if (!token) { navigate('/login'); return }
-    getCurrentUser(api).then((u) => { 
-      setMe(u)
-      setProfile({
-        fullName: u?.fullname || u?.fullName || '',
-        phone: u?.phone || '',
-        province: u?.city || u?.province || '',
-        ward: u?.ward || '',
-        address_detail: u?.address || u?.address_detail || ''
-      })
-    }).finally(() => setLoading(false))
+    const load = async () => {
+      try {
+        const [u, addrList] = await Promise.all([
+          getCurrentUser(api),
+          getAddresses(api).catch(() => [])
+        ])
+        setMe(u)
+        setProfile({
+          fullName: u?.fullname || u?.fullName || '',
+          phone: u?.phone || '',
+          province: u?.city || u?.province || '',
+          ward: u?.ward || '',
+          address_detail: u?.address || u?.address_detail || ''
+        })
+        setAddresses(Array.isArray(addrList) ? addrList : [])
+      } catch (e) {
+        console.error('Load profile error:', e)
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
   }, [api, token, navigate])
 
-  if (loading) return <main className="mx-auto max-w-7xl px-4 py-10"><p>{VI.common.loading}</p></main>
+  const handleAddAddress = async () => {
+    if (!addrForm.fullName.trim() || !addrForm.phone.trim() || !addrForm.province || !addrForm.ward || !addrForm.addressDetail.trim()) {
+      toast.show('❌ Vui lòng nhập đầy đủ thông tin địa chỉ', { type: 'error' })
+      return
+    }
+    const cleanPhone = addrForm.phone.replace(/\s+/g, '')
+    if (!/^\d{10,11}$/.test(cleanPhone)) {
+      toast.show('❌ Số điện thoại phải có 10-11 chữ số', { type: 'error' })
+      return
+    }
+    setAddrLoading(true)
+    try {
+      const created = await createAddress(api, {
+        fullName: addrForm.fullName.trim(),
+        phone: cleanPhone,
+        province: addrForm.province,
+        ward: addrForm.ward,
+        addressDetail: addrForm.addressDetail.trim(),
+        isDefault: addresses.length === 0 // địa chỉ đầu tiên là mặc định
+      })
+      const refreshed = await getAddresses(api).catch(() => [])
+      setAddresses(Array.isArray(refreshed) ? refreshed : [...addresses, created])
+      // Nếu là địa chỉ mặc định mới, cập nhật profile hiển thị
+      if (created.isDefault) {
+        setProfile(prev => ({
+          ...prev,
+          fullName: created.fullName || prev.fullName,
+          phone: created.phone || prev.phone,
+          province: created.province || prev.province,
+          ward: created.ward || prev.ward,
+          address_detail: created.addressDetail || prev.address_detail
+        }))
+      }
+      setAddrForm({
+        fullName: '',
+        phone: '',
+        province: '',
+        ward: '',
+        addressDetail: ''
+      })
+      setIsAddingAddress(false)
+      toast.show('✅ Thêm địa chỉ mới thành công', { type: 'success' })
+    } catch (err) {
+      console.error('Create address error:', err)
+      const msg = err?.response?.data?.error || 'Không thể thêm địa chỉ mới'
+      toast.show(`❌ ${msg}`, { type: 'error' })
+    } finally {
+      setAddrLoading(false)
+    }
+  }
+
+  const handleDeleteAddress = async (id, isDefault) => {
+    if (!window.confirm('Bạn có chắc muốn xóa địa chỉ này?')) return
+    setAddrLoading(true)
+    try {
+      await deleteAddress(api, id)
+      const refreshed = await getAddresses(api).catch(() => [])
+      setAddresses(Array.isArray(refreshed) ? refreshed : addresses.filter(a => a.id !== id))
+      // Nếu xóa địa chỉ mặc định, backend đã tự chọn địa chỉ khác, nên refetch là đủ
+      toast.show('✅ Đã xóa địa chỉ', { type: 'success' })
+    } catch (err) {
+      console.error('Delete address error:', err)
+      const msg = err?.response?.data?.error || 'Không thể xóa địa chỉ'
+      toast.show(`❌ ${msg}`, { type: 'error' })
+    } finally {
+      setAddrLoading(false)
+    }
+  }
+
+  const handleSetDefaultAddress = async (id) => {
+    setAddrLoading(true)
+    try {
+      await setDefaultAddress(api, id)
+      const refreshed = await getAddresses(api).catch(() => [])
+      setAddresses(Array.isArray(refreshed) ? refreshed : addresses)
+      // Đồng bộ profile từ địa chỉ mặc định mới
+      const def = Array.isArray(refreshed) ? refreshed.find(a => a.isDefault) : null
+      if (def) {
+        setProfile(prev => ({
+          ...prev,
+          fullName: def.fullName || prev.fullName,
+          phone: def.phone || prev.phone,
+          province: def.province || prev.province,
+          ward: def.ward || prev.ward,
+          address_detail: def.addressDetail || prev.address_detail
+        }))
+      }
+      toast.show('✅ Đã đặt làm địa chỉ mặc định', { type: 'success' })
+    } catch (err) {
+      console.error('Set default address error:', err)
+      const msg = err?.response?.data?.error || 'Không thể đặt địa chỉ mặc định'
+      toast.show(`❌ ${msg}`, { type: 'error' })
+    } finally {
+      setAddrLoading(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <main className="mx-auto max-w-7xl px-4 py-10">
+        <p>{VI.common.loading}</p>
+      </main>
+    )
+  }
+
+  if (!me) {
+    return (
+      <main className="mx-auto max-w-7xl px-4 py-10">
+        <motion.h1 
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-6 text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100 font-bitcount"
+        >
+          {VI.common.profile}
+        </motion.h1>
+        <p className="text-slate-600 dark:text-slate-400">Không thể tải thông tin tài khoản.</p>
+      </main>
+    )
+  }
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-10">
@@ -53,10 +193,8 @@ export default function Profile() {
       >
         {VI.common.profile}
       </motion.h1>
-      {!me ? (
-        <p className="text-slate-600 dark:text-slate-400">Không thể tải thông tin tài khoản.</p>
-      ) : (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           <div className="card p-6">
             <div className="flex items-center gap-3 mb-4">
               <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary text-white text-xl font-bitcount">
@@ -124,8 +262,10 @@ export default function Profile() {
               </div>
             )}
           </div>
-          <div className="lg:col-span-2 card p-6">
-            <h3 className="text-lg font-semibold mb-4">Thông tin cá nhân</h3>
+          <div className="lg:col-span-2 space-y-6">
+            {/* Thông tin cá nhân */}
+            <div className="card p-6">
+              <h3 className="text-lg font-semibold mb-4">Thông tin cá nhân</h3>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
               <div>
@@ -235,11 +375,12 @@ export default function Profile() {
             >
               {saving ? 'Đang lưu...' : 'Lưu thông tin'}
             </button>
+            </div>
 
-            <hr className="my-6 border-slate-200 dark:border-slate-700" />
-
-            <h3 className="text-lg font-semibold mb-4">Đổi mật khẩu</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            {/* Đổi mật khẩu */}
+            <div className="card p-6">
+              <h3 className="text-lg font-semibold mb-4">Đổi mật khẩu</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
               <div>
                 <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-2">Mật khẩu hiện tại</label>
                 <input 
@@ -281,27 +422,189 @@ export default function Profile() {
             >
               {saving ? 'Đang cập nhật...' : 'Cập nhật mật khẩu'}
             </button>
+            </div>
 
-            <hr className="my-6 border-slate-200 dark:border-slate-700" />
+            {/* Địa chỉ giao hàng */}
+            <div className="card p-6">
+              <h3 className="text-lg font-semibold mb-4">Địa chỉ giao hàng</h3>
+              {addresses.length === 0 && (
+                <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
+                  Bạn chưa có địa chỉ giao hàng nào. Hãy thêm ít nhất một địa chỉ để sử dụng khi đặt hàng.
+                </p>
+              )}
+              <div className="space-y-3">
+                {addresses.map(addr => (
+                  <div
+                    key={addr.id}
+                    className={`flex flex-col md:flex-row md:items-center md:justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${
+                      addr.isDefault
+                        ? 'border-primary bg-primary/5 dark:border-primary/80'
+                        : 'border-slate-200 dark:border-slate-700'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-semibold dark:text-slate-100">
+                          {addr.fullName}
+                        </span>
+                        {addr.isDefault && (
+                          <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                            Mặc định
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                        <div>SĐT: {addr.phone}</div>
+                        <div className="mt-0.5">
+                          {[addr.addressDetail, addr.ward, addr.province].filter(Boolean).join(', ')}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 self-start md:self-auto">
+                      {!addr.isDefault && (
+                        <button
+                          onClick={() => handleSetDefaultAddress(addr.id)}
+                          className="px-3 py-1.5 rounded-lg border border-primary text-primary text-xs font-medium hover:bg-primary/5 transition-colors"
+                          disabled={addrLoading}
+                        >
+                          Đặt làm mặc định
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleDeleteAddress(addr.id, addr.isDefault)}
+                        className="px-3 py-1.5 rounded-lg border border-red-400 text-red-500 text-xs font-medium hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                        disabled={addrLoading}
+                      >
+                        Xóa
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
 
-            <h3 className="text-lg font-semibold mb-4">Hành động nhanh</h3>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <a href="/orders" className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center gap-3">
-                <svg className="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                </svg>
-                <span className="font-medium">Xem đơn hàng</span>
-              </a>
-              <a href="/cart" className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center gap-3">
-                <svg className="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
-                </svg>
-                <span className="font-medium">Mở giỏ hàng</span>
-              </a>
+              <div className="mt-4 border-t border-slate-200 dark:border-slate-700 pt-4">
+                {!isAddingAddress ? (
+                  <button
+                    onClick={() => setIsAddingAddress(true)}
+                    className="px-4 py-2 rounded-lg border border-dashed border-slate-300 dark:border-slate-600 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+                  >
+                    + Thêm địa chỉ mới
+                  </button>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Họ và tên</label>
+                        <input
+                          type="text"
+                          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:bg-slate-800 dark:border-slate-700 focus:ring-2 focus:ring-primary focus:border-transparent"
+                          value={addrForm.fullName}
+                          onChange={(e) => setAddrForm({ ...addrForm, fullName: e.target.value })}
+                          placeholder="Nguyễn Văn B"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Số điện thoại</label>
+                        <input
+                          type="tel"
+                          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:bg-slate-800 dark:border-slate-700 focus:ring-2 focus:ring-primary focus:border-transparent"
+                          value={addrForm.phone}
+                          onChange={(e) => setAddrForm({ ...addrForm, phone: e.target.value })}
+                          placeholder="0912345678"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Tỉnh/Thành phố</label>
+                        <select
+                          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:bg-slate-800 dark:border-slate-700 focus:ring-2 focus:ring-primary focus:border-transparent bg-white dark:bg-slate-800"
+                          value={addrForm.province}
+                          onChange={(e) => setAddrForm({ ...addrForm, province: e.target.value, ward: '' })}
+                        >
+                          <option value="">Chọn tỉnh/thành phố</option>
+                          {getProvinces().map(city => (
+                            <option key={city} value={city}>{city}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Phường/Xã</label>
+                        {addrForm.province && getWards(addrForm.province).length > 0 ? (
+                          <select
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:bg-slate-800 dark:border-slate-700 focus:ring-2 focus:ring-primary focus:border-transparent bg-white dark:bg-slate-800"
+                            value={addrForm.ward}
+                            onChange={(e) => setAddrForm({ ...addrForm, ward: e.target.value })}
+                          >
+                            <option value="">Chọn phường/xã</option>
+                            {getWards(addrForm.province).map(ward => (
+                              <option key={ward} value={ward}>{ward}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            type="text"
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:bg-slate-800 dark:border-slate-700 focus:ring-2 focus:ring-primary focus:border-transparent"
+                            value={addrForm.ward}
+                            onChange={(e) => setAddrForm({ ...addrForm, ward: e.target.value })}
+                            placeholder="Nhập phường/xã"
+                          />
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Địa chỉ chi tiết</label>
+                      <input
+                        type="text"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:bg-slate-800 dark:border-slate-700 focus:ring-2 focus:ring-primary focus:border-transparent"
+                        value={addrForm.addressDetail}
+                        onChange={(e) => setAddrForm({ ...addrForm, addressDetail: e.target.value })}
+                        placeholder="VD: Số 123, đường Nguyễn Huệ"
+                      />
+                    </div>
+                    <div className="flex gap-2 justify-end">
+                      <button
+                        type="button"
+                        onClick={() => { setIsAddingAddress(false); setAddrForm({ fullName: '', phone: '', province: '', ward: '', addressDetail: '' }) }}
+                        className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-600 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+                        disabled={addrLoading}
+                      >
+                        Hủy
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleAddAddress}
+                        className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+                        disabled={addrLoading}
+                      >
+                        {addrLoading ? 'Đang lưu...' : 'Lưu địa chỉ'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Hành động nhanh */}
+            <div className="card p-6">
+              <h3 className="text-lg font-semibold mb-4">Hành động nhanh</h3>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <a href="/orders" className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center gap-3">
+                  <svg className="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                  </svg>
+                  <span className="font-medium">Xem đơn hàng</span>
+                </a>
+                <a href="/cart" className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center gap-3">
+                  <svg className="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
+                  </svg>
+                  <span className="font-medium">Mở giỏ hàng</span>
+                </a>
+              </div>
             </div>
           </div>
         </div>
-      )}
     </main>
   )
 }
