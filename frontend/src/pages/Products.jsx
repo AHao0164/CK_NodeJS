@@ -1,12 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { useSearchParams, Link } from 'react-router-dom'
+import { useSearchParams, Link, useNavigate } from 'react-router-dom'
 import { listProducts } from '../services/catalog'
 import { motion } from 'framer-motion'
 import { VI } from '../constants/vi'
 import { getCategoryVietnameseName } from '../constants/categoryMapping'
+import { useAuth } from '../context/AuthContext'
+import { useCart } from '../context/CartContext'
+import { useToast } from '../ui/Toast'
+import { addItemToCart, addGuestItemToCart } from '../services/cart'
 
 export default function Products() {
 	const [params, setParams] = useSearchParams()
+	const navigate = useNavigate()
+	const { api, token } = useAuth()
+	const { refreshCart } = useCart()
+	const toast = useToast()
 	const [loading, setLoading] = useState(true)
 	const [data, setData] = useState({ items: [], page: 1, pageSize: 20, total: 0 })
 	const [brands, setBrands] = useState([])
@@ -15,6 +23,7 @@ export default function Products() {
 		// Load from localStorage or default to 'grid'
 		return localStorage.getItem('productViewMode') || 'grid'
 	})
+	const [addingToCart, setAddingToCart] = useState(new Set())
 	
 	const q = params.get('q') || ''
 	const page = parseInt(params.get('page') || '1', 10)
@@ -23,14 +32,6 @@ export default function Products() {
 	const brandId = params.get('brandId') || ''
 	const minPrice = params.get('minPrice') || ''
 	const maxPrice = params.get('maxPrice') || ''
-	
-	// Calculate current price filter value for select
-	const currentPriceFilter = useMemo(() => {
-		if (minPrice && maxPrice) {
-			return `${minPrice}-${maxPrice}`;
-		}
-		return '';
-	}, [minPrice, maxPrice]);
 	const minRating = params.get('minRating') || ''
 
 	useEffect(() => {
@@ -72,6 +73,79 @@ export default function Products() {
 		localStorage.setItem('productViewMode', mode)
 	}
 
+	async function handleAddToCart(p) {
+		if (addingToCart.has(p.id)) return
+		
+		setAddingToCart(prev => new Set(prev).add(p.id))
+		
+		try {
+			// Calculate final price with discount (same as displayed price)
+			const originalPrice = Number(p.price_cents || 0);
+			const discountPercent = Number(p.discount_percent || 0);
+			const finalPrice = Math.round(originalPrice * (100 - discountPercent) / 100);
+			
+			if (token) {
+				await addItemToCart(api, { 
+					productId: p.id, 
+					quantity: 1, 
+					priceCents: finalPrice // Use discounted price
+				})
+				await refreshCart()
+				toast.show('✓ Đã thêm vào giỏ hàng', { type: 'success' })
+			} else {
+				let guestCartId = sessionStorage.getItem('guestCartId')
+				const { guestCartId: newGuestCartId, items } = await addGuestItemToCart({
+					guestCartId,
+					productId: p.id,
+					quantity: 1,
+					priceCents: finalPrice // Use discounted price
+				})
+				sessionStorage.setItem('guestCartId', newGuestCartId)
+				sessionStorage.setItem('guestCartItems', JSON.stringify(items))
+				await refreshCart()
+				toast.show('✓ Đã thêm vào giỏ hàng', { type: 'success' })
+			}
+		} catch (e) {
+			toast.show('❌ Lỗi khi thêm vào giỏ hàng', { type: 'error' })
+		} finally {
+			setAddingToCart(prev => {
+				const next = new Set(prev)
+				next.delete(p.id)
+				return next
+			})
+		}
+	}
+
+	async function handleBuyNow(p) {
+		// Calculate final price with discount (same as displayed price)
+		const originalPrice = Number(p.price_cents || 0);
+		const discountPercent = Number(p.discount_percent || 0);
+		const finalPrice = Math.round(originalPrice * (100 - discountPercent) / 100);
+		
+		if (token) {
+			try {
+				await addItemToCart(api, { 
+					productId: p.id, 
+					quantity: 1, 
+					priceCents: finalPrice // Use discounted price
+				})
+				navigate('/cart')
+			} catch (e) {
+				toast.show('❌ Lỗi khi thêm vào giỏ hàng', { type: 'error' })
+			}
+		} else {
+			navigate('/checkout', {
+				state: {
+					guestItems: [{
+						productId: p.id,
+						quantity: 1,
+						priceCents: finalPrice // Use discounted price
+					}]
+				}
+			})
+		}
+	}
+
 	return (
 		<main className="mx-auto max-w-7xl px-4 py-10">
 			<motion.h1 
@@ -104,6 +178,11 @@ export default function Products() {
 				<div className="flex flex-wrap items-center gap-3">
 					{/* Category Filter */}
 					<div className="flex items-center gap-2 flex-shrink-0">
+						<div className="flex items-center justify-center w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/30">
+							<svg className="w-4 h-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+							</svg>
+						</div>
 						<select 
 							className="h-10 min-w-[160px] rounded-xl border-2 border-slate-200 bg-white px-4 pr-9 text-sm font-medium transition-all hover:border-blue-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:bg-slate-800 dark:border-slate-600 dark:text-slate-100 dark:hover:border-blue-600 dark:focus:border-blue-500 cursor-pointer appearance-none bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22currentColor%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpolyline points=%226 9 12 15 18 9%22%3E%3C/polyline%3E%3C/svg%3E')] bg-no-repeat bg-right-2 bg-[length:20px]" 
 							value={categoryId} 
@@ -118,6 +197,11 @@ export default function Products() {
 					
 					{/* Brand Filter */}
 					<div className="flex items-center gap-2 flex-shrink-0">
+						<div className="flex items-center justify-center w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-900/30">
+							<svg className="w-4 h-4 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+							</svg>
+						</div>
 						<select 
 							className="h-10 min-w-[160px] rounded-xl border-2 border-slate-200 bg-white px-4 pr-9 text-sm font-medium transition-all hover:border-purple-300 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 dark:bg-slate-800 dark:border-slate-600 dark:text-slate-100 dark:hover:border-purple-600 dark:focus:border-purple-500 cursor-pointer appearance-none bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22currentColor%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpolyline points=%226 9 12 15 18 9%22%3E%3C/polyline%3E%3C/svg%3E')] bg-no-repeat bg-right-2 bg-[length:20px]" 
 							value={brandId} 
@@ -130,8 +214,39 @@ export default function Products() {
 						</select>
 					</div>
 					
+					{/* Price Filter */}
+					<div className="flex items-center gap-2 flex-shrink-0">
+						<div className="flex items-center justify-center w-8 h-8 rounded-lg bg-green-100 dark:bg-green-900/30">
+							<svg className="w-4 h-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+							</svg>
+						</div>
+						<select 
+							className="h-10 min-w-[160px] rounded-xl border-2 border-slate-200 bg-white px-4 pr-9 text-sm font-medium transition-all hover:border-green-300 focus:border-green-500 focus:ring-2 focus:ring-green-500/20 dark:bg-slate-800 dark:border-slate-600 dark:text-slate-100 dark:hover:border-green-600 dark:focus:border-green-500 cursor-pointer appearance-none bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22currentColor%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpolyline points=%226 9 12 15 18 9%22%3E%3C/polyline%3E%3C/svg%3E')] bg-no-repeat bg-right-2 bg-[length:20px]" 
+							value={minPrice ? `${minPrice}-${maxPrice}` : ''} 
+							onChange={(e) => {
+								const [min, max] = e.target.value.split('-')
+								updateParam('minPrice', min)
+								updateParam('maxPrice', max)
+							}}
+						>
+							<option value="">Tất cả mức giá</option>
+							<option value="0-10000000">Dưới 10 triệu</option>
+							<option value="10000000-20000000">10 - 20 triệu</option>
+							<option value="20000000-30000000">20 - 30 triệu</option>
+							<option value="30000000-40000000">30 - 40 triệu</option>
+							<option value="40000000-50000000">40 - 50 triệu</option>
+							<option value="50000000-999999999">Trên 50 triệu</option>
+						</select>
+					</div>
+					
 					{/* Rating Filter */}
 					<div className="flex items-center gap-2 flex-shrink-0">
+						<div className="flex items-center justify-center w-8 h-8 rounded-lg bg-yellow-100 dark:bg-yellow-900/30">
+							<svg className="w-4 h-4 text-yellow-600 dark:text-yellow-400" fill="currentColor" viewBox="0 0 24 24">
+								<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+							</svg>
+						</div>
 						<select 
 							className="h-10 min-w-[160px] rounded-xl border-2 border-slate-200 bg-white px-4 pr-9 text-sm font-medium transition-all hover:border-yellow-300 focus:border-yellow-500 focus:ring-2 focus:ring-yellow-500/20 dark:bg-slate-800 dark:border-slate-600 dark:text-slate-100 dark:hover:border-yellow-600 dark:focus:border-yellow-500 cursor-pointer appearance-none bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22currentColor%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpolyline points=%226 9 12 15 18 9%22%3E%3C/polyline%3E%3C/svg%3E')] bg-no-repeat bg-right-2 bg-[length:20px]" 
 							value={minRating} 
@@ -149,6 +264,12 @@ export default function Products() {
 					
 					{/* View Mode Toggle */}
 					<div className="flex items-center gap-2 flex-shrink-0">
+						<div className="flex items-center justify-center w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-900/30">
+							<svg className="w-4 h-4 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+								<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+							</svg>
+						</div>
 						<div className="flex items-center border-2 border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden bg-white dark:bg-slate-800 shadow-sm">
 							<button
 								onClick={() => handleViewModeChange('grid')}
@@ -181,6 +302,11 @@ export default function Products() {
 					
 					{/* Sort */}
 					<div className="flex items-center gap-2 flex-shrink-0 ml-auto">
+						<div className="flex items-center justify-center w-8 h-8 rounded-lg bg-cyan-100 dark:bg-cyan-900/30">
+							<svg className="w-4 h-4 text-cyan-600 dark:text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12" />
+							</svg>
+						</div>
 						<select 
 							className="h-10 min-w-[180px] rounded-xl border-2 border-slate-200 bg-white px-4 pr-9 text-sm font-medium transition-all hover:border-cyan-300 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 dark:bg-slate-800 dark:border-slate-600 dark:text-slate-100 dark:hover:border-cyan-600 dark:focus:border-cyan-500 cursor-pointer appearance-none bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22currentColor%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpolyline points=%226 9 12 15 18 9%22%3E%3C/polyline%3E%3C/svg%3E')] bg-no-repeat bg-right-2 bg-[length:20px]" 
 							value={sort} 
@@ -195,7 +321,7 @@ export default function Products() {
 					</div>
 					
 					{/* Clear Filters */}
-					{(q || categoryId || brandId || minRating) && (
+					{(q || categoryId || brandId || minPrice || minRating) && (
 						<button 
 							className="h-10 rounded-xl border-2 border-red-300 bg-gradient-to-r from-red-50 to-red-100 px-4 text-sm font-semibold text-red-700 transition-all hover:from-red-100 hover:to-red-200 hover:border-red-400 hover:shadow-md dark:from-red-900/20 dark:to-red-900/30 dark:border-red-700 dark:text-red-400 dark:hover:from-red-900/30 dark:hover:to-red-900/40 flex items-center gap-2" 
 							onClick={() => setParams({})}
@@ -227,6 +353,14 @@ export default function Products() {
 							<span className="inline-flex items-center gap-1 rounded-lg bg-green-100 px-3 py-1 text-green-700 font-medium dark:bg-green-900/30 dark:text-green-400">
 								{brands.find(b => b.id == brandId)?.name || ''}
 								<button onClick={() => updateParam('brandId', '')} className="hover:text-green-900">×</button>
+							</span>
+						)}
+						{minPrice && (
+							<span className="inline-flex items-center gap-1 rounded-lg bg-orange-100 px-3 py-1 text-orange-700 font-medium dark:bg-orange-900/30 dark:text-orange-400">
+								{parseInt(minPrice) === 0 ? `Dưới ${(parseInt(maxPrice)/1000000).toFixed(0)} triệu` :
+								 parseInt(maxPrice) > 50000000 ? `Trên ${(parseInt(minPrice)/1000000).toFixed(0)} triệu` :
+								 `${(parseInt(minPrice)/1000000).toFixed(0)} - ${(parseInt(maxPrice)/1000000).toFixed(0)} triệu`}
+								<button onClick={() => { updateParam('minPrice', ''); updateParam('maxPrice', ''); }} className="hover:text-orange-900">×</button>
 							</span>
 						)}
 						{minRating && (
@@ -269,7 +403,7 @@ export default function Products() {
 					<p className="text-slate-600 dark:text-slate-400 mb-6">
 						{VI.products.tryAdjustingFilters}
 					</p>
-					{(q || categoryId || brandId || minRating) && (
+					{(q || categoryId || brandId || minPrice || minRating) && (
 						<button 
 							className="btn btn-primary rounded-xl px-6"
 							onClick={() => setParams({})}
@@ -324,12 +458,41 @@ export default function Products() {
 										<p className="text-xs text-slate-600 dark:text-slate-400 mb-3">
 											{p.brand} • {getCategoryVietnameseName(p.category)}
 										</p>
-										<div className="flex items-baseline gap-2">
+										<div className="flex items-baseline gap-2 mb-3">
 											<p className="text-lg font-bold text-primary">{finalPrice.toLocaleString('vi-VN')} ₫</p>
 											{discountPercent > 0 && (
 												<p className="text-xs text-slate-400 line-through">{originalPrice.toLocaleString('vi-VN')} ₫</p>
 											)}
 										</div>
+										{p.stock > 0 ? (
+											<div className="flex gap-2">
+												<button
+													onClick={(e) => {
+														e.preventDefault()
+														e.stopPropagation()
+														handleAddToCart(p)
+													}}
+													disabled={addingToCart.has(p.id)}
+													className="flex-1 btn btn-outline text-xs py-2 rounded-xl hover:bg-primary hover:text-white hover:border-primary transition-all duration-200 hover:shadow-md active:scale-95 disabled:opacity-50"
+												>
+													{addingToCart.has(p.id) ? 'Đang thêm...' : 'Thêm vào giỏ'}
+												</button>
+												<button
+													onClick={(e) => {
+														e.preventDefault()
+														e.stopPropagation()
+														handleBuyNow(p)
+													}}
+													className="flex-1 btn btn-primary text-xs py-2 rounded-xl hover:bg-primary/90 hover:shadow-lg transition-all duration-200 active:scale-95"
+												>
+													Mua ngay
+												</button>
+											</div>
+										) : (
+											<div className="text-center py-2 text-xs text-red-500 font-semibold bg-red-50 dark:bg-red-900/20 rounded-xl border border-red-200 dark:border-red-800">
+												Sản phẩm tạm hết hàng
+											</div>
+										)}
 									</div>
 								</Link>
 							</motion.div>
@@ -393,16 +556,42 @@ export default function Products() {
 													</p>
 												)}
 											</div>
-											<div className="flex items-center justify-between">
+											<div className="flex flex-col gap-3">
 												<div className="flex items-baseline gap-2">
 													<p className="text-xl font-bold text-primary">{finalPrice.toLocaleString('vi-VN')} ₫</p>
 													{discountPercent > 0 && (
 														<p className="text-sm text-slate-400 line-through">{originalPrice.toLocaleString('vi-VN')} ₫</p>
 													)}
 												</div>
-												<button className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors text-sm font-medium">
-													Xem chi tiết
-												</button>
+												{p.stock > 0 ? (
+													<div className="flex gap-2">
+														<button
+															onClick={(e) => {
+																e.preventDefault()
+																e.stopPropagation()
+																handleAddToCart(p)
+															}}
+															disabled={addingToCart.has(p.id)}
+															className="flex-1 btn btn-outline text-xs py-2 rounded-xl hover:bg-primary hover:text-white hover:border-primary transition-all duration-200 hover:shadow-md active:scale-95 disabled:opacity-50"
+														>
+															{addingToCart.has(p.id) ? 'Đang thêm...' : 'Thêm vào giỏ'}
+														</button>
+														<button
+															onClick={(e) => {
+																e.preventDefault()
+																e.stopPropagation()
+																handleBuyNow(p)
+															}}
+															className="flex-1 btn btn-primary text-xs py-2 rounded-xl hover:bg-primary/90 hover:shadow-lg transition-all duration-200 active:scale-95"
+														>
+															Mua ngay
+														</button>
+													</div>
+												) : (
+													<div className="text-center py-2 text-xs text-red-500 font-semibold bg-red-50 dark:bg-red-900/20 rounded-xl border border-red-200 dark:border-red-800">
+														Sản phẩm tạm hết hàng
+													</div>
+												)}
 											</div>
 										</div>
 									</div>

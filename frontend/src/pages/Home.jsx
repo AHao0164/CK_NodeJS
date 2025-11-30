@@ -47,10 +47,15 @@ export default function Home() {
   }, [])
   
   async function add(p) {
+    // Calculate final price with discount (same as displayed price)
+    const originalPrice = Number(p.price_cents || 0);
+    const discountPercent = Number(p.discount_percent || 0);
+    const finalPrice = Math.round(originalPrice * (100 - discountPercent) / 100);
+    
     // Đã đăng nhập: thêm vào giỏ hàng của user
     if (token) {
       try {
-        await addItemToCart(api, { productId: p.id, quantity: 1, priceCents: p.price_cents })
+        await addItemToCart(api, { productId: p.id, quantity: 1, priceCents: finalPrice })
         await refreshCart()
         toast.show(VI.products.addedToCart, { type: 'success' })
       } catch (e) {
@@ -66,7 +71,7 @@ export default function Home() {
         guestCartId,
         productId: p.id,
         quantity: 1,
-        priceCents: p.price_cents
+        priceCents: finalPrice
       })
       sessionStorage.setItem('guestCartId', newGuestCartId)
       sessionStorage.setItem('guestCartItems', JSON.stringify(items))
@@ -78,10 +83,15 @@ export default function Home() {
   }
 
   async function buyNow(p) {
+    // Calculate final price with discount (same as displayed price)
+    const originalPrice = Number(p.price_cents || 0);
+    const discountPercent = Number(p.discount_percent || 0);
+    const finalPrice = Math.round(originalPrice * (100 - discountPercent) / 100);
+    
     // Đã đăng nhập: thêm vào giỏ và chuyển sang trang giỏ hàng (hành vi cũ)
     if (token) {
       try {
-        await addItemToCart(api, { productId: p.id, quantity: 1, priceCents: p.price_cents })
+        await addItemToCart(api, { productId: p.id, quantity: 1, priceCents: finalPrice })
         navigate('/cart')
       } catch (e) {
         toast.show(VI.errors.somethingWentWrong, { type: 'error' })
@@ -96,7 +106,7 @@ export default function Home() {
           {
             productId: p.id,
             quantity: 1,
-            priceCents: p.price_cents
+            priceCents: finalPrice
           }
         ]
       }

@@ -140,8 +140,15 @@ export default function OrderDetail() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-slate-900 truncate">{it.product_name || `Sản phẩm #${it.product_id}`}</div>
-                      <div className="text-sm text-slate-500 mt-1">Số lượng: {it.quantity}</div>
-                      <div className="text-sm text-slate-900 mt-1">{(it.price_cents || 0).toLocaleString('vi-VN')} ₫ × {it.quantity}</div>
+                      <div className="text-sm text-slate-500 mt-1">
+                        Số lượng: <span className="font-medium">{it.quantity}</span>
+                        {it.product_stock !== undefined && (
+                          <> | Tồn kho: <span className="font-medium">{it.product_stock}</span></>
+                        )}
+                      </div>
+                      <div className="text-sm text-slate-900 mt-1">
+                        Đơn giá: {(it.price_cents || 0).toLocaleString('vi-VN')} ₫ × {it.quantity}
+                      </div>
                     </div>
                     <div className="text-right">
                       <div className="font-semibold text-slate-900">{(it.subtotal_cents || 0).toLocaleString('vi-VN')} ₫</div>

@@ -253,11 +253,11 @@ const CardNav = ({
   return (
     <>
       <div
-        className={`card-nav-container relative left-1/2 -translate-x-1/2 w-full max-w-[1400px] z-[99] my-2 pt-3 transition-all duration-300 ease-in-out ${className}`}
+        className={`card-nav-container fixed top-0 left-1/2 -translate-x-1/2 w-full max-w-[1400px] z-[99] px-4 pt-3 pb-2 transition-all duration-300 ease-in-out bg-white/80 dark:bg-gray-900/80 backdrop-blur-md ${className}`}
       >
         <nav
           ref={navRef}
-          className={`card-nav ${isExpanded ? 'open' : ''} ${isSearchOpen ? 'search-mode' : ''} block h-auto min-h-[80px] p-0 rounded-xl shadow-md relative overflow-visible will-change-[height] bg-white dark:bg-gray-900 transition-all duration-150 ease-in-out border border-gray-200 dark:border-gray-800`}
+          className={`card-nav ${isExpanded ? 'open' : ''} ${isSearchOpen ? 'search-mode' : ''} block h-auto min-h-[80px] p-0 rounded-xl shadow-lg relative overflow-visible will-change-[height] bg-white dark:bg-gray-900 transition-all duration-150 ease-in-out border border-gray-200 dark:border-gray-800`}
         >
           {/* Main Header Bar */}
           <div className={`card-nav-top w-full h-[80px] flex items-center justify-between px-4 py-2 z-[2] transition-all duration-150 ease-in-out ${
@@ -332,6 +332,24 @@ const CardNav = ({
                 <FaUser className="text-xl" />
               </button>
 
+              {/* Orders - Always visible for logged in users */}
+              {token && (
+                <button
+                  onClick={() => {
+                    navigate('/orders');
+                    collapseMenu();
+                    setIsCategoryOpen(false);
+                  }}
+                  className="relative p-2 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-all duration-200"
+                  aria-label="Đơn hàng"
+                  title="Đơn hàng"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+                  </svg>
+                </button>
+              )}
+
               {/* Notifications */}
               {token && (
                 <button
@@ -398,7 +416,7 @@ const CardNav = ({
 
       {/* Global category dropdown overlay - always on top of content */}
       {isCategoryOpen && (
-        <div className="fixed inset-x-0 top-[90px] z-[120] flex justify-center pointer-events-none">
+        <div className="fixed inset-x-0 top-[100px] z-[120] flex justify-center pointer-events-none">
           <div className="w-[90%] max-w-[1400px] flex justify-start px-4">
             <div
               ref={categoryDropdownRef}

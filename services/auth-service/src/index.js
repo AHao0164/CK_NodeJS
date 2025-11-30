@@ -347,8 +347,14 @@ app.post('/auth/ensure-guest', async (req, res) => {
 
     return res.status(201).json({ id: result.insertId, email, existing: false });
   } catch (e) {
-    console.error('ensure-guest error:', e);
-    return res.status(500).json({ error: 'Server error' });
+    console.error('❌ ensure-guest error:', e);
+    console.error('   Error message:', e.message);
+    console.error('   Error code:', e.code);
+    console.error('   Error stack:', e.stack);
+    return res.status(500).json({ 
+      error: 'Server error',
+      message: process.env.NODE_ENV === 'development' ? e.message : 'Failed to create guest account'
+    });
   }
 });
 
@@ -1530,24 +1536,45 @@ app.patch('/auth/addresses/:id/default', async (req, res) => {
   }
 });
 
-// Send COD OTP for checkout
+// Send COD OTP for checkout (supports both authenticated and guest users)
 app.post('/auth/send-cod-otp', async (req, res) => {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'Missing token' });
-
+  
+  console.log('📧 Send COD OTP request:', {
+    hasToken: !!token,
+    email: req.body?.email,
+    orderId: req.body?.orderId
+  });
+  
   const { email, orderTotal, items } = req.body;
   if (!email) return res.status(400).json({ error: 'Email is required' });
 
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
+    let userId = null;
+    
+    // If token provided, verify and get user_id
+    if (token) {
+      try {
+        const payload = jwt.verify(token, JWT_SECRET);
+        userId = payload.sub;
+        console.log('✅ Authenticated user:', userId);
+      } catch (jwtError) {
+        // Invalid token, but allow guest to continue
+        console.warn('⚠️ Invalid token for COD OTP, treating as guest:', jwtError.message);
+      }
+    } else {
+      console.log('👤 Guest user (no token)');
+    }
+    
     const otp = generateOTP();
     
     // Store OTP in database with 3 minute expiry
+    // For guest users, user_id will be NULL and we use email as identifier
     const expiresAt = new Date(Date.now() + 3 * 60 * 1000);
     await pool.execute(
       'INSERT INTO otp_codes (user_id, email, code, type, expires_at) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE email = ?, code = ?, expires_at = ?',
-      [payload.sub, email, otp, 'COD', expiresAt, email, otp, expiresAt]
+      [userId, email, otp, 'COD', expiresAt, email, otp, expiresAt]
     );
 
     // Send email
@@ -1624,14 +1651,13 @@ app.post('/auth/send-cod-otp', async (req, res) => {
   }
 });
 
-// Verify COD OTP
+// Verify COD OTP (supports both authenticated and guest users)
 app.post('/auth/verify-cod-otp', async (req, res) => {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'Missing token' });
 
-  const { email, otp } = req.body;
-  console.log('Verify COD OTP request:', { email, otp, bodyKeys: Object.keys(req.body) });
+  const { email, otp, orderId } = req.body;
+  console.log('Verify COD OTP request:', { email, otp, orderId, hasToken: !!token });
   
   if (!email || !otp) {
     console.log('Missing email or OTP:', { email: !!email, otp: !!otp });
@@ -1639,15 +1665,34 @@ app.post('/auth/verify-cod-otp', async (req, res) => {
   }
 
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    console.log('JWT verified, user_id:', payload.sub);
+    let userId = null;
     
-    const [rows] = await pool.execute(
-      'SELECT * FROM otp_codes WHERE user_id = ? AND email = ? AND code = ? AND type = ? AND expires_at > NOW()',
-      [payload.sub, email, otp, 'COD']
-    );
+    // If token provided, verify and get user_id
+    if (token) {
+      try {
+        const payload = jwt.verify(token, JWT_SECRET);
+        userId = payload.sub;
+        console.log('JWT verified, user_id:', userId);
+      } catch (jwtError) {
+        // Invalid token, but allow guest to continue
+        console.warn('Invalid token for COD OTP verification, treating as guest:', jwtError.message);
+      }
+    }
+    
+    // For guest users (userId is NULL), find OTP by email only
+    // For authenticated users, find by both user_id and email
+    let query, params;
+    if (userId) {
+      query = 'SELECT * FROM otp_codes WHERE user_id = ? AND email = ? AND code = ? AND type = ? AND expires_at > NOW()';
+      params = [userId, email, otp, 'COD'];
+    } else {
+      query = 'SELECT * FROM otp_codes WHERE user_id IS NULL AND email = ? AND code = ? AND type = ? AND expires_at > NOW()';
+      params = [email, otp, 'COD'];
+    }
+    
+    const [rows] = await pool.execute(query, params);
 
-    console.log('OTP query result:', { found: rows.length, userId: payload.sub, email, otp });
+    console.log('OTP query result:', { found: rows.length, userId, email, otp });
 
     if (rows.length === 0) {
       return res.status(400).json({ error: 'Invalid or expired OTP' });
@@ -1656,27 +1701,44 @@ app.post('/auth/verify-cod-otp', async (req, res) => {
     // Delete used OTP
     await pool.execute('DELETE FROM otp_codes WHERE id = ?', [rows[0].id]);
     
-    // ✅ NEW: Call order-service to confirm order and reserve inventory
-    // This is where stock should be deducted for COD orders
+    // ✅ Call order-service to confirm order and reserve inventory
+    // For guest users, orderId must be provided in request body
+    // For authenticated users, we can find order by userId (or use orderId if provided)
     try {
       const ORDER_SERVICE_URL = process.env.ORDER_SERVICE_URL || 'http://order-service:3004';
+      
+      // Build confirm body: always include email, include orderId if provided (for guest)
+      const confirmBody = { email };
+      if (orderId) {
+        confirmBody.orderId = orderId;
+      }
+      
       const orderResponse = await fetch(`${ORDER_SERVICE_URL}/orders/confirm-cod`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-id': payload.sub.toString()
+          ...(userId ? { 'x-user-id': userId.toString() } : {})
         },
-        body: JSON.stringify({ userId: payload.sub, email })
+        body: JSON.stringify(confirmBody)
       });
       
       if (!orderResponse.ok) {
-        console.error('Failed to confirm COD order:', await orderResponse.text());
+        const errorText = await orderResponse.text();
+        console.error('Failed to confirm COD order:', errorText);
+        return res.status(500).json({ 
+          error: 'Failed to confirm order',
+          message: process.env.NODE_ENV === 'development' ? errorText : 'Server error'
+        });
       } else {
-        console.log('✅ COD order confirmed and stock reserved');
+        const result = await orderResponse.json();
+        console.log('✅ COD order confirmed and stock reserved:', result);
       }
     } catch (orderErr) {
       console.error('Error calling order service:', orderErr.message);
-      // Continue even if order confirmation fails - user already verified OTP
+      return res.status(500).json({ 
+        error: 'Failed to confirm order',
+        message: process.env.NODE_ENV === 'development' ? orderErr.message : 'Server error'
+      });
     }
 
     return res.json({ ok: true, message: 'OTP verified successfully' });

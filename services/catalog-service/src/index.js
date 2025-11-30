@@ -97,6 +97,39 @@ const esClient = new Client({
 
 const ES_INDEX_NAME = 'products';
 
+// Ensure guest_comments table exists
+async function ensureGuestCommentsTable() {
+  try {
+    // Check if table exists
+    const [tables] = await pool.query(
+      `SELECT COUNT(*) as count 
+       FROM information_schema.tables 
+       WHERE table_schema = DATABASE() 
+       AND table_name = 'guest_comments'`
+    );
+    
+    if (tables[0].count === 0) {
+      console.log('📦 Creating guest_comments table...');
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS guest_comments (
+          id BIGINT PRIMARY KEY AUTO_INCREMENT,
+          product_id BIGINT NOT NULL,
+          guest_name VARCHAR(255) NOT NULL,
+          comment TEXT NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+          INDEX idx_product (product_id),
+          INDEX idx_created (created_at)
+        )
+      `);
+      console.log('✅ guest_comments table created successfully');
+    }
+  } catch (error) {
+    console.error('❌ Failed to ensure guest_comments table:', error);
+    // Don't throw - let the endpoint handle it
+  }
+}
+
 // Initialize ElasticSearch index
 async function initElasticSearchIndex() {
   try {
@@ -2027,93 +2060,172 @@ app.delete('/admin/banners/:id', async (req, res) => {
 app.get('/catalog/products/:id/reviews', async (req, res) => {
   try {
     const { id } = req.params;
+    const productId = parseInt(id, 10);
+    
+    if (isNaN(productId)) {
+      return res.status(400).json({ error: 'Invalid product ID' });
+    }
+    
     const limit = Math.min(parseInt(req.query.limit || '20', 10), 100);
     const offset = Math.max(parseInt(req.query.offset || '0', 10), 0);
     const ratingFilter = req.query.rating ? parseInt(req.query.rating, 10) : null;
 
-    let query = `
-      SELECT r.id, r.product_id, r.user_id, r.rating, r.comment, r.admin_reply, 
-             r.created_at, r.updated_at,
-             u.full_name as user_name, u.email as user_email
-      FROM product_reviews r
-      LEFT JOIN auth_db.users u ON r.user_id = u.id
-      WHERE r.product_id = ?
-    `;
-    const params = [id];
+    // Try to get reviews with user info, fallback to reviews without user info if JOIN fails
+    let reviews = [];
+    try {
+      let query = `
+        SELECT r.id, r.product_id, r.user_id, r.rating, r.comment, r.admin_reply, 
+               r.created_at, r.updated_at,
+               u.full_name as user_name, u.email as user_email
+        FROM product_reviews r
+        LEFT JOIN auth_db.users u ON r.user_id = u.id
+        WHERE r.product_id = ?
+      `;
+      const params = [productId];
 
-    if (ratingFilter && ratingFilter >= 1 && ratingFilter <= 5) {
-      query += ' AND r.rating = ?';
-      params.push(ratingFilter);
+      if (ratingFilter && ratingFilter >= 1 && ratingFilter <= 5) {
+        query += ' AND r.rating = ?';
+        params.push(ratingFilter);
+      }
+
+      query += ' ORDER BY r.created_at DESC LIMIT ? OFFSET ?';
+      params.push(limit, offset);
+
+      [reviews] = await pool.query(query, params);
+    } catch (joinError) {
+      // Fallback: Get reviews without user info if JOIN fails
+      console.warn('Failed to JOIN with auth_db.users, using fallback query:', joinError.message);
+      let query = `
+        SELECT r.id, r.product_id, r.user_id, r.rating, r.comment, r.admin_reply, 
+               r.created_at, r.updated_at,
+               NULL as user_name, NULL as user_email
+        FROM product_reviews r
+        WHERE r.product_id = ?
+      `;
+      const params = [productId];
+
+      if (ratingFilter && ratingFilter >= 1 && ratingFilter <= 5) {
+        query += ' AND r.rating = ?';
+        params.push(ratingFilter);
+      }
+
+      query += ' ORDER BY r.created_at DESC LIMIT ? OFFSET ?';
+      params.push(limit, offset);
+
+      [reviews] = await pool.query(query, params);
     }
-
-    query += ' ORDER BY r.created_at DESC LIMIT ? OFFSET ?';
-    params.push(limit, offset);
-
-    const [reviews] = await pool.query(query, params);
 
     // Load comments for each review
     for (const review of reviews) {
-      const [comments] = await pool.query(
-        `SELECT rc.id, rc.user_id, rc.is_admin, rc.comment, rc.created_at,
-                u.full_name as user_name, u.email as user_email
-         FROM review_comments rc
-         LEFT JOIN auth_db.users u ON rc.user_id = u.id
-         WHERE rc.review_id = ?
-         ORDER BY rc.created_at ASC`,
-        [review.id]
-      );
-      review.comments = comments;
+      try {
+        let commentsQuery = `
+          SELECT rc.id, rc.user_id, rc.is_admin, rc.comment, rc.created_at,
+                 u.full_name as user_name, u.email as user_email
+          FROM review_comments rc
+          LEFT JOIN auth_db.users u ON rc.user_id = u.id
+          WHERE rc.review_id = ?
+          ORDER BY rc.created_at ASC
+        `;
+        const [comments] = await pool.query(commentsQuery, [review.id]);
+        review.comments = comments || [];
+      } catch (commentError) {
+        // Fallback: Get comments without user info
+        console.warn('Failed to load comments with user info:', commentError.message);
+        try {
+          const [comments] = await pool.query(
+            `SELECT rc.id, rc.user_id, rc.is_admin, rc.comment, rc.created_at,
+                    NULL as user_name, NULL as user_email
+             FROM review_comments rc
+             WHERE rc.review_id = ?
+             ORDER BY rc.created_at ASC`,
+            [review.id]
+          );
+          review.comments = comments || [];
+        } catch (fallbackError) {
+          console.error('Failed to load comments:', fallbackError);
+          review.comments = [];
+        }
+      }
     }
 
     // Load guest comments (comments without rating from non-logged-in users)
-    const [guestComments] = await pool.query(
-      `SELECT id, product_id, comment, guest_name, created_at
-       FROM guest_comments
-       WHERE product_id = ?
-       ORDER BY created_at DESC LIMIT ? OFFSET ?`,
-      [id, limit, offset]
-    );
+    let guestComments = [];
+    try {
+      const [gc] = await pool.query(
+        `SELECT id, product_id, comment, guest_name, created_at
+         FROM guest_comments
+         WHERE product_id = ?
+         ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+        [productId, limit, offset]
+      );
+      guestComments = gc || [];
+    } catch (guestError) {
+      console.warn('Failed to load guest comments:', guestError.message);
+      guestComments = [];
+    }
 
     // Get average rating and total count (ALL reviews, unfiltered)
-    const [[stats]] = await pool.query(
-      `SELECT AVG(rating) as avg_rating, COUNT(*) as total_reviews
-       FROM product_reviews WHERE product_id = ?`,
-      [id]
-    );
+    let stats = { avg_rating: null, total_reviews: 0 };
+    try {
+      const [[statsResult]] = await pool.query(
+        `SELECT AVG(rating) as avg_rating, COUNT(*) as total_reviews
+         FROM product_reviews WHERE product_id = ?`,
+        [productId]
+      );
+      stats = statsResult || stats;
+    } catch (statsError) {
+      console.warn('Failed to get review stats:', statsError.message);
+    }
 
     // Get filtered count (for pagination)
-    let filteredCountQuery = 'SELECT COUNT(*) as filtered_count FROM product_reviews WHERE product_id = ?';
-    const filteredParams = [id];
-    if (ratingFilter && ratingFilter >= 1 && ratingFilter <= 5) {
-      filteredCountQuery += ' AND rating = ?';
-      filteredParams.push(ratingFilter);
+    let filteredCount = 0;
+    try {
+      let filteredCountQuery = 'SELECT COUNT(*) as filtered_count FROM product_reviews WHERE product_id = ?';
+      const filteredParams = [productId];
+      if (ratingFilter && ratingFilter >= 1 && ratingFilter <= 5) {
+        filteredCountQuery += ' AND rating = ?';
+        filteredParams.push(ratingFilter);
+      }
+      const [[filteredCountResult]] = await pool.query(filteredCountQuery, filteredParams);
+      filteredCount = filteredCountResult?.filtered_count || 0;
+    } catch (countError) {
+      console.warn('Failed to get filtered count:', countError.message);
     }
-    const [[filteredCount]] = await pool.query(filteredCountQuery, filteredParams);
 
     // Get rating distribution (ALL reviews, unfiltered)
-    const [distribution] = await pool.query(
-      `SELECT rating, COUNT(*) as count
-       FROM product_reviews WHERE product_id = ?
-       GROUP BY rating ORDER BY rating DESC`,
-      [id]
-    );
+    let distribution = {};
+    try {
+      const [dist] = await pool.query(
+        `SELECT rating, COUNT(*) as count
+         FROM product_reviews WHERE product_id = ?
+         GROUP BY rating ORDER BY rating DESC`,
+        [productId]
+      );
+      distribution = (dist || []).reduce((acc, d) => {
+        acc[d.rating] = d.count;
+        return acc;
+      }, {});
+    } catch (distError) {
+      console.warn('Failed to get rating distribution:', distError.message);
+    }
 
     return res.json({
-      reviews,
-      guestComments: guestComments || [], // Guest comments (no rating)
+      reviews: reviews || [],
+      guestComments: guestComments,
       stats: {
         average: stats.avg_rating ? parseFloat(parseFloat(stats.avg_rating).toFixed(1)) : 0,
         total: stats.total_reviews || 0,
-        filtered: filteredCount.filtered_count || 0
+        filtered: filteredCount
       },
-      distribution: distribution.reduce((acc, d) => {
-        acc[d.rating] = d.count;
-        return acc;
-      }, {})
+      distribution: distribution
     });
   } catch (e) {
     console.error('Get reviews error:', e);
-    return res.status(500).json({ error: 'Server error' });
+    console.error('Error stack:', e.stack);
+    return res.status(500).json({ 
+      error: 'Server error',
+      message: process.env.NODE_ENV === 'development' ? e.message : 'Failed to load reviews'
+    });
   }
 });
 
@@ -2121,31 +2233,112 @@ app.get('/catalog/products/:id/reviews', async (req, res) => {
 app.post('/catalog/products/:id/guest-comments', async (req, res) => {
   try {
     const { id } = req.params;
+    const productId = parseInt(id, 10);
+    
+    if (isNaN(productId)) {
+      return res.status(400).json({ error: 'Invalid product ID' });
+    }
+    
     const { comment, guestName } = req.body;
 
     if (!comment || !comment.trim()) {
       return res.status(400).json({ error: 'Comment cannot be empty' });
     }
 
+    // Ensure table exists before proceeding
+    await ensureGuestCommentsTable();
+
     // Check if product exists
-    const [[product]] = await pool.query('SELECT id FROM products WHERE id = ?', [id]);
-    if (!product) return res.status(404).json({ error: 'Product not found' });
+    let product = null;
+    try {
+      const [[productResult]] = await pool.query('SELECT id FROM products WHERE id = ?', [productId]);
+      product = productResult;
+    } catch (productError) {
+      console.error('Failed to check product existence:', productError);
+      return res.status(500).json({ 
+        error: 'Failed to verify product',
+        message: process.env.NODE_ENV === 'development' ? productError.message : 'Server error'
+      });
+    }
+    
+    if (!product) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
 
     // Insert guest comment
     // guest_name is NOT NULL, so use a default value if not provided
-    const name = guestName?.trim() || 'Khách';
-    const [result] = await pool.query(
-      'INSERT INTO guest_comments (product_id, comment, guest_name) VALUES (?, ?, ?)',
-      [id, comment.trim(), name]
-    );
+    const name = (guestName?.trim() || 'Khách').substring(0, 255); // Limit length to match VARCHAR(255)
+    const commentText = comment.trim().substring(0, 65535); // Limit to TEXT field max
     
-    // Emit WebSocket event for real-time update
-    emitReviewUpdate(id, { type: 'new_guest_comment', productId: id });
+    let result;
+    try {
+      [result] = await pool.query(
+        'INSERT INTO guest_comments (product_id, comment, guest_name) VALUES (?, ?, ?)',
+        [productId, commentText, name]
+      );
+    } catch (insertError) {
+      console.error('❌ Failed to insert guest comment:', insertError);
+      console.error('   Error code:', insertError.code);
+      console.error('   Error message:', insertError.message);
+      console.error('   Error sqlState:', insertError.sqlState);
+      console.error('   Error sqlMessage:', insertError.sqlMessage);
+      console.error('   Stack:', insertError.stack);
+      
+      // Check if it's a foreign key constraint error
+      if (insertError.code === 'ER_NO_REFERENCED_ROW_2' || 
+          insertError.code === 'ER_ROW_IS_REFERENCED_2' ||
+          insertError.code === '1452') {
+        return res.status(404).json({ error: 'Product not found' });
+      }
+      // Check if table doesn't exist
+      if (insertError.code === 'ER_NO_SUCH_TABLE' || insertError.code === '42S02') {
+        console.error('❌ Table guest_comments does not exist. Please run database migrations.');
+        console.error('   Run: mysql -u root -p catalog_db < services/catalog-service/db/migrate-guest-comments.sql');
+        return res.status(500).json({ 
+          error: 'Database table not found',
+          message: process.env.NODE_ENV === 'development' 
+            ? `Table guest_comments does not exist. Error: ${insertError.message}` 
+            : 'Server error'
+        });
+      }
+      // Check for other MySQL errors
+      if (insertError.code && insertError.code.startsWith('ER_')) {
+        return res.status(500).json({ 
+          error: 'Database error',
+          message: process.env.NODE_ENV === 'development' 
+            ? `MySQL Error (${insertError.code}): ${insertError.message}` 
+            : 'Failed to post comment'
+        });
+      }
+      return res.status(500).json({ 
+        error: 'Failed to post comment',
+        message: process.env.NODE_ENV === 'development' 
+          ? insertError.message || 'Unknown error' 
+          : 'Server error'
+      });
+    }
     
-    return res.json({ message: 'Comment posted', commentId: result.insertId });
+    // Emit WebSocket event for real-time update (non-blocking)
+    try {
+      if (typeof emitReviewUpdate === 'function') {
+        emitReviewUpdate(productId, { type: 'new_guest_comment', productId: productId });
+      }
+    } catch (wsError) {
+      console.warn('Failed to emit WebSocket event (non-critical):', wsError.message);
+      // Don't fail the request if WebSocket fails
+    }
+    
+    return res.json({ 
+      message: 'Comment posted successfully', 
+      commentId: result.insertId 
+    });
   } catch (e) {
     console.error('Submit guest comment error:', e);
-    return res.status(500).json({ error: 'Server error' });
+    console.error('Error stack:', e.stack);
+    return res.status(500).json({ 
+      error: 'Server error',
+      message: process.env.NODE_ENV === 'development' ? e.message : 'Failed to post comment'
+    });
   }
 });
 
@@ -2598,6 +2791,13 @@ initElasticSearchIndex().then(() => {
 }).catch(err => {
   console.error('❌ ElasticSearch initialization failed:', err);
   console.warn('⚠️ Service will run with MySQL search only');
+});
+
+// Ensure guest_comments table exists on startup
+ensureGuestCommentsTable().then(() => {
+  console.log('✅ Guest comments table verified');
+}).catch(err => {
+  console.error('❌ Failed to verify guest comments table:', err);
 });
 
 // Ensure schema on startup
