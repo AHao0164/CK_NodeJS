@@ -3,7 +3,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 const API_KEY = process.env.GEMINI_API_KEY || '';
 
 if (!API_KEY) {
-  console.warn('⚠️ GEMINI_API_KEY not set. AI features will be disabled.');
+  console.warn('GEMINI_API_KEY not set. AI features will be disabled.');
 }
 
 const genAI = API_KEY ? new GoogleGenerativeAI(API_KEY) : null;

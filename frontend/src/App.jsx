@@ -42,7 +42,7 @@ const App = () => {
                 ease="power3.out"
               />
             )}
-            <main className="flex-1">
+            <main className="flex-1 pt-24 sm:pt-28">
               <Routes>
                 <Route path="/" element={<Home />} />
                 <Route path="/products" element={<Products />} />

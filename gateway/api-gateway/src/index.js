@@ -39,6 +39,8 @@ function authMiddleware(req, res, next) {
     { method: 'POST', path: /^\/auth\/forgot-password$/ },
     { method: 'POST', path: /^\/auth\/reset-password$/ },
     { method: 'POST', path: /^\/auth\/verify-reset-otp$/ },
+    { method: 'POST', path: /^\/auth\/send-cod-otp$/ }, // Guest COD OTP
+    { method: 'POST', path: /^\/auth\/verify-cod-otp$/ }, // Guest COD OTP verification
     { method: 'GET', path: /^\/auth\/verify-reset-token/ },
     { method: 'GET', path: /^\/auth\/google/ },
     { method: 'GET', path: /^\/auth\/facebook/ },
@@ -118,12 +120,23 @@ function authMiddleware(req, res, next) {
   if (isProtected || (isKnownApiPath && !isPublic)) {
     const authHeader = req.headers.authorization || '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    if (!token) return res.status(401).json({ error: 'Missing token' });
+    if (!token) {
+      // For /auth/me and /auth/loyalty-points, let auth-service handle the error
+      // Some endpoints might work without token (like checking if user exists)
+      if (req.path === '/auth/me' || req.path === '/auth/loyalty-points' || req.path.startsWith('/auth/loyalty-points/')) {
+        return next();
+      }
+      return res.status(401).json({ error: 'Missing token' });
+    }
     try {
       const payload = jwt.verify(token, JWT_SECRET);
       req.user = { id: payload.sub, email: payload.email, role: payload.role || 'USER' };
       return next();
     } catch (e) {
+      // For /auth/me, let auth-service handle invalid token error
+      if (req.path === '/auth/me' || req.path === '/auth/loyalty-points' || req.path.startsWith('/auth/loyalty-points/')) {
+        return next();
+      }
       return res.status(401).json({ error: 'Invalid token' });
     }
   }
@@ -236,6 +249,18 @@ async function proxy(req, res, baseUrl) {
       // Handle redirects manually - pass them through to the client (like gateway1)
       if (response.status >= 300 && response.status < 400 && response.headers.location) {
         return res.redirect(response.status, response.headers.location);
+      }
+      
+      // If response is JSON (content-type includes application/json), parse buffer to JSON
+      const contentType = response.headers['content-type'] || '';
+      if (contentType.includes('application/json') && Buffer.isBuffer(response.data)) {
+        try {
+          const jsonData = JSON.parse(response.data.toString('utf-8'));
+          return res.status(response.status).set(response.headers).json(jsonData);
+        } catch (parseErr) {
+          // If parsing fails, send as buffer
+          console.warn(`[Gateway] Failed to parse JSON response for ${req.originalUrl}:`, parseErr.message);
+        }
       }
       
       res.status(response.status).set(response.headers).send(response.data);

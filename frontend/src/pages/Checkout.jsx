@@ -143,17 +143,26 @@ export default function Checkout() {
   function detailsOf(id) { return catalog.find(x => x.id === id) }
   
   // Filter cart items to only include selected ones
-  // If we loaded from location.state?.selectedItems, items are already filtered
-  // Otherwise, filter by selectedItemIds if provided
-  const selectedCartItems = (Array.isArray(location.state?.selectedItems) && location.state.selectedItems.length > 0)
-    ? cart.items // Already filtered from selectedItems
-    : (selectedItemIds.length > 0 
-      ? cart.items.filter(it => selectedItemIds.includes(it.id))
-      : cart.items); // Fallback to all items if no selection (backward compatibility)
+  // Priority 1: Use location.state?.selectedItems (already filtered from Cart page)
+  // Priority 2: Filter by selectedItemIds if provided
+  // Priority 3: Fallback to all items (backward compatibility)
+  const selectedCartItems = (() => {
+    // If selectedItems are passed from Cart page, use them directly
+    if (Array.isArray(location.state?.selectedItems) && location.state.selectedItems.length > 0) {
+      return location.state.selectedItems; // Use the filtered items directly
+    }
+    // Otherwise, filter cart.items by selectedItemIds
+    if (selectedItemIds.length > 0) {
+      return cart.items.filter(it => selectedItemIds.includes(it.id));
+    }
+    // Fallback: use all items (backward compatibility)
+    return cart.items;
+  })();
   
   const subtotal = selectedCartItems.reduce((s, it) => {
     const p = detailsOf(it.product_id)
-    const originalPrice = p?.price_cents || 0
+    // Use price from catalog if available, otherwise fallback to price stored in cart
+    const originalPrice = p?.price_cents || it.price_cents || 0
     const discountPercent = p?.discount_percent || 0
     const finalPrice = Math.round(originalPrice * (100 - discountPercent) / 100)
     return s + finalPrice * it.quantity
@@ -246,11 +255,8 @@ export default function Checkout() {
       return
     }
 
-    // Khách chưa đăng nhập không được dùng COD (chỉ hỗ trợ VNPay)
-    if (!token && paymentMethod === 'COD') {
-      toast.show('❌ Vui lòng đăng nhập để sử dụng thanh toán COD', { type: 'error' })
-      return
-    }
+    // Khách chưa đăng nhập có thể dùng cả VNPay và COD
+    // COD sẽ gửi OTP qua email từ form shipping
 
     if (paymentMethod === 'COD') {
       handleCODPayment()
@@ -320,6 +326,7 @@ export default function Checkout() {
   }
 
   const handleCODPayment = async () => {
+    setLoading(true)
     try {
       // Prepare order items for email
       const orderItems = selectedCartItems.map(it => {
@@ -331,56 +338,7 @@ export default function Checkout() {
         }
       })
 
-      // Send OTP email
-      await api.post('/auth/send-cod-otp', {
-        email: shipping.email,
-        orderTotal: total,
-        items: orderItems
-      })
-
-      toast.show(`✅ Đã gửi mã OTP xác nhận đơn hàng đến email ${shipping.email}`, { type: 'success' })
-      setShowCODOtpForm(true)
-      setOtpCountdown(180)
-      
-      // Start countdown
-      const timer = setInterval(() => {
-        setOtpCountdown(prev => {
-          if (prev <= 1) {
-            clearInterval(timer)
-            return 0
-          }
-          return prev - 1
-        })
-      }, 1000)
-    } catch (e) {
-      const msg = e?.response?.data?.error || 'Có lỗi khi gửi OTP'
-      toast.show(`❌ ${msg}`, { type: 'error' })
-    }
-  }
-
-  const handleCODOtpSubmit = async () => {
-    if (!codOtp || codOtp.length !== 6) {
-      toast.show('❌ Vui lòng nhập đủ 6 số OTP', { type: 'error' })
-      return
-    }
-
-    if (!shipping.email) {
-      toast.show('❌ Thiếu thông tin email', { type: 'error' })
-      return
-    }
-
-    try {
-      console.log('Verifying COD OTP:', { email: shipping.email, otp: codOtp });
-      
-      // Verify OTP with backend
-      const response = await api.post('/auth/verify-cod-otp', {
-        email: shipping.email,
-        otp: codOtp
-      })
-
-      console.log('OTP verified successfully', response.data);
-
-      // Create order after OTP verification
+      // Create order first (for both authenticated and guest users)
       const orderPayload = {
         items: selectedCartItems.map(it => {
           const p = detailsOf(it.product_id)
@@ -407,30 +365,130 @@ export default function Checkout() {
         pointsToUse: pointsToUse > 0 ? pointsToUse : null
       }
 
-      const { data } = await api.post('/orders/checkout', orderPayload)
+      // Use publicApi for guest users, api for authenticated users
+      const apiClient = token ? api : publicApi
+      const { data: orderData } = await apiClient.post('/orders/checkout', orderPayload)
       
-      console.log('Order created:', data.orderId, '- Now confirming COD order...');
-      
-      // 🔥 FIX: Confirm COD order to deduct stock after OTP verification
-      await api.post('/orders/confirm-cod', {
-        orderId: data.orderId,
+      // Store orderId for OTP verification
+      sessionStorage.setItem('pendingCODOrder', JSON.stringify({
+        orderId: orderData.orderId,
+        email: shipping.email
+      }))
+
+      // Send OTP email (works for both authenticated and guest users)
+      console.log('📧 Sending COD OTP:', {
         email: shipping.email,
-        otp: codOtp
+        usingClient: token ? 'api (authenticated)' : 'publicApi (guest)',
+        hasToken: !!token
       })
       
-      console.log('COD order confirmed and stock deducted');
+      await apiClient.post('/auth/send-cod-otp', {
+        email: shipping.email,
+        orderTotal: total,
+        items: orderItems,
+        orderId: orderData.orderId // Include orderId for guest users
+      })
+
+      toast.show(`✅ Đã gửi mã OTP xác nhận đơn hàng đến email ${shipping.email}`, { type: 'success' })
+      setShowCODOtpForm(true)
+      setOtpCountdown(180)
       
-      // Clear cart after successful order
-      for (const item of cart.items) {
-        await api.delete(`/cart/items/${item.id}`).catch(() => {});
+      // Start countdown
+      const timer = setInterval(() => {
+        setOtpCountdown(prev => {
+          if (prev <= 1) {
+            clearInterval(timer)
+            return 0
+          }
+          return prev - 1
+        })
+      }, 1000)
+    } catch (e) {
+      console.error('COD payment error:', e)
+      console.error('Error response:', e?.response?.data)
+      console.error('Error status:', e?.response?.status)
+      
+      // Get detailed error message
+      let errorMsg = 'Có lỗi khi tạo đơn hàng hoặc gửi OTP'
+      if (e?.response?.data) {
+        if (e.response.data.message) {
+          errorMsg = e.response.data.message
+        } else if (e.response.data.error) {
+          errorMsg = e.response.data.error
+        } else if (e.response.data.details && Array.isArray(e.response.data.details)) {
+          errorMsg = e.response.data.details.join(', ')
+        }
+      }
+      
+      toast.show(`❌ ${errorMsg}`, { type: 'error' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleCODOtpSubmit = async () => {
+    if (!codOtp || codOtp.length !== 6) {
+      toast.show('❌ Vui lòng nhập đủ 6 số OTP', { type: 'error' })
+      return
+    }
+
+    if (!shipping.email) {
+      toast.show('❌ Thiếu thông tin email', { type: 'error' })
+      return
+    }
+
+    try {
+      // Get orderId from sessionStorage (for guest) or from state
+      const pendingOrder = JSON.parse(sessionStorage.getItem('pendingCODOrder') || '{}')
+      const orderId = pendingOrder.orderId
+
+      if (!orderId) {
+        toast.show('❌ Không tìm thấy thông tin đơn hàng. Vui lòng thử lại.', { type: 'error' })
+        return
+      }
+
+      console.log('Verifying COD OTP:', { email: shipping.email, otp: codOtp, orderId });
+      
+      // Use publicApi for guest users, api for authenticated users
+      const apiClient = token ? api : publicApi
+
+      // Verify OTP with backend (works for both authenticated and guest users)
+      // Backend will confirm order and deduct stock automatically
+      const response = await apiClient.post('/auth/verify-cod-otp', {
+        email: shipping.email,
+        otp: codOtp,
+        orderId: orderId // Include orderId for guest users
+      })
+
+      console.log('OTP verified successfully', response.data);
+      
+      // Clear pending order from sessionStorage
+      sessionStorage.removeItem('pendingCODOrder')
+      
+      // Clear cart after successful order (only for authenticated users)
+      if (token) {
+        for (const item of cart.items) {
+          await api.delete(`/cart/items/${item.id}`).catch(() => {});
+        }
+      } else {
+        // For guest users, clear guest cart
+        sessionStorage.removeItem('guestCartItems')
+        sessionStorage.removeItem('guestCartId')
       }
       
       setShowCODOtpForm(false)
-      toast.show(`✓ Đặt hàng thành công! Mã đơn hàng #${data.orderId}`, { type: 'success' })
-      setTimeout(() => navigate('/orders'), 1500)
+      toast.show(`✓ Đặt hàng thành công! Mã đơn hàng #${orderId}`, { type: 'success' })
+      
+      // For guest users, navigate to home or show success message
+      // For authenticated users, navigate to orders page
+      if (token) {
+        setTimeout(() => navigate('/orders'), 1500)
+      } else {
+        setTimeout(() => navigate('/'), 2000)
+      }
     } catch (e) {
       console.error('COD OTP verification failed:', e.response?.data || e.message)
-      const msg = e?.response?.data?.error || 'Mã OTP không đúng hoặc đã hết hạn'
+      const msg = e?.response?.data?.error || e?.response?.data?.message || 'Mã OTP không đúng hoặc đã hết hạn'
       toast.show(`❌ ${msg}`, { type: 'error' })
     }
   }
@@ -619,6 +677,34 @@ export default function Checkout() {
           <Card>
             <CardBody>
               <h3 className="text-lg font-semibold mb-4">Tóm tắt đơn hàng</h3>
+              
+              {/* Order Items Details */}
+              <div className="mb-4 space-y-2 text-sm border-b pb-4">
+                <div className="font-medium mb-2">Chi tiết sản phẩm:</div>
+                {selectedCartItems.map((it, idx) => {
+                  const p = detailsOf(it.product_id)
+                  // Use price from catalog if available, otherwise fallback to price stored in cart
+                  const originalPrice = p?.price_cents || it.price_cents || 0
+                  const discountPercent = p?.discount_percent || 0
+                  const finalPrice = Math.round(originalPrice * (100 - discountPercent) / 100)
+                  const stock = p?.stock || 0
+                  
+                  return (
+                    <div key={idx} className="flex justify-between items-start gap-2 p-2 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-xs truncate">{p?.name || `Sản phẩm #${it.product_id}`}</div>
+                        <div className="text-xs text-slate-500 mt-1">
+                          SL: {it.quantity} | Tồn kho: {stock} | Giá: {finalPrice.toLocaleString('vi-VN')}₫
+                        </div>
+                      </div>
+                      <div className="text-right text-xs font-semibold">
+                        {(finalPrice * it.quantity).toLocaleString('vi-VN')}₫
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+              
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between"><span>Tạm tính</span><span>{subtotal.toLocaleString('vi-VN')} ₫</span></div>
                 <div className="flex justify-between">
@@ -639,16 +725,20 @@ export default function Checkout() {
                     <span>{shippingInfo.message}</span>
                   </div>
                 )}
-                {discount > 0 && (
+                {discount > 0 && coupon && (
                   <div className="flex justify-between text-emerald-700">
-                    <span>Giảm giá ({coupon?.code})</span>
-                    <span>-{discount.toLocaleString('vi-VN')} ₫</span>
+                    <span>
+                      Giảm giá ({coupon.code})
+                      {coupon.type === 'percentage' && ` - ${coupon.value}%`}
+                      {coupon.type === 'fixed' && ` - ${(coupon.value >= 100000 && coupon.value % 100 === 0 ? coupon.value / 100 : coupon.value).toLocaleString('vi-VN')}₫`}
+                    </span>
+                    <span className="font-semibold">-{discount.toLocaleString('vi-VN')} ₫</span>
                   </div>
                 )}
                 {pointsDiscount > 0 && (
                   <div className="flex justify-between text-emerald-700">
-                    <span>Điểm thưởng ({pointsToUse} điểm)</span>
-                    <span>-{pointsDiscount.toLocaleString('vi-VN')} ₫</span>
+                    <span>Điểm thưởng ({pointsToUse} điểm = {pointsDiscount.toLocaleString('vi-VN')}₫)</span>
+                    <span className="font-semibold">-{pointsDiscount.toLocaleString('vi-VN')} ₫</span>
                   </div>
                 )}
                 <div className="flex justify-between font-semibold text-base pt-2 border-t"><span>Tổng cộng</span><span className="text-primary">{total.toLocaleString('vi-VN')} ₫</span></div>

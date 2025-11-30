@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS orders (
   -- Shipping info
   shipping_name VARCHAR(255) NOT NULL,
   shipping_phone VARCHAR(20) NOT NULL,
+  shipping_email VARCHAR(255),
   shipping_province VARCHAR(100) NOT NULL,
   shipping_district VARCHAR(100) NOT NULL,
   shipping_ward VARCHAR(100) NOT NULL,

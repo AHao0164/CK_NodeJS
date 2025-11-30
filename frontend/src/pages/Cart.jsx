@@ -59,7 +59,8 @@ export default function Cart() {
     .filter(it => selectedItems.has(it.id))
     .reduce((s, it) => {
       const p = detailsOf(it.product_id)
-      const originalPrice = p?.price_cents || 0
+      // Use price from catalog if available, otherwise fallback to price stored in cart
+      const originalPrice = p?.price_cents || it.price_cents || 0
       const discountPercent = p?.discount_percent || 0
       const finalPrice = Math.round(originalPrice * (100 - discountPercent) / 100)
       return s + finalPrice * it.quantity
@@ -205,7 +206,8 @@ export default function Cart() {
                     {cart.items.map(it => {
                       const p = detailsOf(it.product_id) || {}
                       const img = p.image_url || 'https://images.unsplash.com/photo-1517336714731-489689fd1ca8?q=80&w=1200&auto=format&fit=crop'
-                      const originalPrice = p.price_cents || 0
+                      // Use price from catalog if available, otherwise fallback to price stored in cart
+                      const originalPrice = p.price_cents || it.price_cents || 0
                       const discountPercent = p.discount_percent || 0
                       const finalPrice = Math.round(originalPrice * (100 - discountPercent) / 100)
                       

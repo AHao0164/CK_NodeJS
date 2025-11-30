@@ -226,23 +226,15 @@ export default function DashboardPage() {
         return orderDate.getMonth() === lastMonth && orderDate.getFullYear() === lastMonthYear;
       });
 
-      // Calculate revenue from paid/confirmed/delivered orders
-      // Include: PAID (VNPay), CONFIRMED (COD confirmed), DELIVERED (COD delivered)
-      // Exclude: CANCELLED, PENDING
+      // Calculate revenue from DELIVERED orders only
+      // Only count revenue when order is DELIVERED (not CONFIRMED or SHIPPING)
+      // Exclude: CANCELLED, PENDING, CONFIRMED, SHIPPING
       const currentMonthRevenue = currentMonthOrders
-        .filter(o => 
-          o.status !== 'CANCELLED' && 
-          o.status !== 'PENDING' &&
-          (o.payment_status === 'PAID' || o.status === 'CONFIRMED' || o.status === 'DELIVERED' || o.status === 'SHIPPING')
-        )
+        .filter(o => o.status === 'DELIVERED')
         .reduce((sum, o) => sum + (o.total_cents || 0), 0);
 
       const lastMonthRevenue = lastMonthOrders
-        .filter(o => 
-          o.status !== 'CANCELLED' && 
-          o.status !== 'PENDING' &&
-          (o.payment_status === 'PAID' || o.status === 'CONFIRMED' || o.status === 'DELIVERED' || o.status === 'SHIPPING')
-        )
+        .filter(o => o.status === 'DELIVERED')
         .reduce((sum, o) => sum + (o.total_cents || 0), 0);
 
       const currentMonthOrderCount = currentMonthOrders.length;
@@ -255,15 +247,11 @@ export default function DashboardPage() {
       const ordersTrend = lastMonthOrderCount === 0 ? null :
         ((currentMonthOrderCount - lastMonthOrderCount) / lastMonthOrderCount * 100).toFixed(1);
 
-      // Calculate total revenue from paid/confirmed/delivered orders
-      // Include: PAID (VNPay), CONFIRMED (COD confirmed), DELIVERED (COD delivered), SHIPPING
-      // Exclude: CANCELLED, PENDING
+      // Calculate total revenue from DELIVERED orders only
+      // Only count revenue when order is DELIVERED
+      // Exclude: CANCELLED, PENDING, CONFIRMED, SHIPPING
       const totalRevenue = orders
-        .filter(o => 
-          o.status !== 'CANCELLED' && 
-          o.status !== 'PENDING' &&
-          (o.payment_status === 'PAID' || o.status === 'CONFIRMED' || o.status === 'DELIVERED' || o.status === 'SHIPPING')
-        )
+        .filter(o => o.status === 'DELIVERED')
         .reduce((sum, o) => sum + (o.total_cents || 0), 0);
 
       const recentOrders = orders.slice(0, 5);
@@ -282,11 +270,10 @@ export default function DashboardPage() {
       const revenueChart = last7Days.map(date => {
         // Include orders that are paid/confirmed/delivered/shipping (exclude cancelled/pending)
         // Note: total_cents is already in VND (not actual cents)
+        // Only count DELIVERED orders for revenue
         const dayOrders = orders.filter(o => 
           o.created_at?.startsWith(date) && 
-          o.status !== 'CANCELLED' && 
-          o.status !== 'PENDING' &&
-          (o.payment_status === 'PAID' || o.status === 'CONFIRMED' || o.status === 'DELIVERED' || o.status === 'SHIPPING')
+          o.status === 'DELIVERED'
         );
         const revenue = dayOrders.reduce((sum, o) => sum + (o.total_cents || 0), 0); // Already in VND
         return {

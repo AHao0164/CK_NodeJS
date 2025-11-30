@@ -140,6 +140,8 @@ async function ensureSchema() {
     await ensureColumn('orders', 'shipping_district', 'shipping_district VARCHAR(100)');
     await ensureColumn('orders', 'shipping_ward', 'shipping_ward VARCHAR(100)');
     await ensureColumn('orders', 'shipping_address', 'shipping_address TEXT');
+    await ensureColumn('orders', 'points_used', 'points_used INT DEFAULT 0');
+    await ensureColumn('orders', 'points_discount_cents', 'points_discount_cents INT DEFAULT 0');
     await ensureColumn('orders', 'shipping_fee_cents', 'shipping_fee_cents INT DEFAULT 0');
     await ensureColumn('orders', 'discount_cents', 'discount_cents INT DEFAULT 0');
     await ensureColumn('orders', 'billing_name', 'billing_name VARCHAR(255)');
@@ -222,11 +224,22 @@ async function ensureUserForGuest(shipping) {
     addressDetail: shipping.address || null
   };
 
-  const { data } = await httpClient.post(`${AUTH_SERVICE_URL}/auth/ensure-guest`, payload);
-  if (!data || !data.id) {
-    throw new Error('Failed to ensure guest account');
+  console.log('🔵 Calling ensure-guest with payload:', JSON.stringify(payload, null, 2));
+  
+  try {
+    const response = await httpClient.post(`${AUTH_SERVICE_URL}/auth/ensure-guest`, payload);
+    console.log('🔵 ensure-guest response:', JSON.stringify(response.data, null, 2));
+    
+    if (!response.data || !response.data.id) {
+      throw new Error('Failed to ensure guest account: No user ID returned');
+    }
+    return response.data.id;
+  } catch (error) {
+    console.error('❌ ensure-guest API error:', error.message);
+    console.error('   Response status:', error.response?.status);
+    console.error('   Response data:', error.response?.data);
+    throw new Error(`Failed to ensure guest account: ${error.message}`);
   }
-  return data.id;
 }
 
 // Helper: Record order status change in history
@@ -333,12 +346,32 @@ app.post('/orders/checkout', async (req, res) => {
   // If not authenticated, auto-create or reuse an account based on email
   if (!userId) {
     try {
-      userId = await ensureUserForGuest(shipping);
+      console.log('🔵 Creating guest account for:', shipping.email);
+      console.log('   Shipping data:', JSON.stringify(shipping, null, 2));
+      
+      // Ensure shipping object has all required fields for ensureUserForGuest
+      const guestShippingData = {
+        email: shipping.email,
+        name: shipping.name,
+        phone: shipping.phone,
+        province: shipping.province || shipping.city || null,
+        ward: shipping.ward || null,
+        address: shipping.address || null
+      };
+      
+      console.log('   Guest shipping data:', JSON.stringify(guestShippingData, null, 2));
+      
+      userId = await ensureUserForGuest(guestShippingData);
+      console.log('✅ Guest account created/reused, userId:', userId);
     } catch (err) {
-      console.error('ensureUserForGuest error:', err.message);
+      console.error('❌ ensureUserForGuest error:', err);
+      console.error('   Error message:', err.message);
+      console.error('   Error response:', err.response?.data);
+      console.error('   Error stack:', err.stack);
       return res.status(500).json({ 
         error: 'GUEST_ACCOUNT_ERROR',
-        message: 'Không thể tạo tài khoản cho khách. Vui lòng thử lại hoặc đăng nhập.'
+        message: 'Không thể tạo tài khoản cho khách. Vui lòng thử lại hoặc đăng nhập.',
+        details: process.env.NODE_ENV === 'development' ? err.message : undefined
       });
     }
   }
@@ -347,15 +380,47 @@ app.post('/orders/checkout', async (req, res) => {
   // Lock by userId to ensure only one order creation at a time per user
   const orderLockKey = `order:create:${userId}`;
   
+  console.log('🔵 Starting checkout process:', {
+    userId,
+    itemCount: items.length,
+    paymentMethod,
+    hasCoupon: !!couponCode,
+    pointsToUse
+  });
+  
   try {
-    return await lockManager.withLock(orderLockKey, async () => {
+    const result = await lockManager.withLock(orderLockKey, async () => {
+      console.log('🔵 Processing checkout inside lock...');
       return await processCheckout(userId, items, shipping, paymentMethod, couponCode, pointsToUse, pool, res);
     }, { ttlSeconds: 30, maxRetries: 1, throwOnFailure: false });
+    
+    if (!result) {
+      console.error('❌ Checkout returned null/undefined');
+      return res.status(500).json({ 
+        error: 'CHECKOUT_FAILED',
+        message: 'Không thể tạo đơn hàng. Vui lòng thử lại.'
+      });
+    }
+    
+    return result;
   } catch (error) {
-    console.error('Order creation lock error:', error);
-    return res.status(429).json({ 
-      error: 'ORDER_IN_PROGRESS',
-      message: 'Đơn hàng của bạn đang được xử lý. Vui lòng không click liên tục.' 
+    console.error('❌ Order creation error:', error);
+    console.error('   Error message:', error.message);
+    console.error('   Error stack:', error.stack);
+    
+    // If it's a lock error, return 429
+    if (error.message && error.message.includes('lock')) {
+      return res.status(429).json({ 
+        error: 'ORDER_IN_PROGRESS',
+        message: 'Đơn hàng của bạn đang được xử lý. Vui lòng không click liên tục.' 
+      });
+    }
+    
+    // Otherwise, return 500
+    return res.status(500).json({ 
+      error: 'CHECKOUT_ERROR',
+      message: 'Có lỗi xảy ra khi tạo đơn hàng. Vui lòng thử lại.',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
@@ -409,7 +474,7 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
       if (c.max_usage_per_user) {
         const [[usage]] = await conn.query(
           'SELECT COUNT(*) as count FROM orders WHERE user_id = ? AND coupon_code = ?',
-          [userId, couponCode]
+          [userId, normalizedCode]
         );
         if (usage && usage.count >= c.max_usage_per_user) {
           await conn.rollback();
@@ -419,9 +484,17 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
       }
       
       appliedCoupon = c;
-      if (c.type === 'percentage') discountCents = Math.floor((subtotalCents * c.value) / 100);
-      if (c.type === 'fixed') discountCents = Math.min(subtotalCents, c.value);
-      if (c.type === 'freeship') discountCents = 0;
+      // Store normalized code for later use
+      appliedCoupon.normalizedCode = normalizedCode;
+      
+      if (c.type === 'percentage') {
+        discountCents = Math.floor((subtotalCents * c.value) / 100);
+      } else if (c.type === 'fixed') {
+        discountCents = Math.min(subtotalCents, c.value);
+      } else if (c.type === 'freeship') {
+        // Freeship: discount = shipping fee (will be applied later)
+        discountCents = shippingFeeCents;
+      }
       
       // Increment usage counter (will be committed with order)
       await conn.query(
@@ -430,12 +503,29 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
       );
       
       await conn.commit();
-    } catch (e) {
-      await conn.rollback();
-      console.error('Coupon validation error:', e);
-      return res.status(500).json({ error: 'COUPON_ERROR', details: ['Lỗi xử lý mã giảm giá'] });
-    } finally {
       conn.release();
+    } catch (e) {
+      if (conn) {
+        try {
+          await conn.rollback();
+        } catch (rollbackErr) {
+          console.error('Rollback error:', rollbackErr);
+        }
+        try {
+          conn.release();
+        } catch (releaseErr) {
+          console.error('Release error:', releaseErr);
+        }
+      }
+      console.error('❌ Coupon validation error:', e);
+      console.error('   Error message:', e.message);
+      console.error('   Error code:', e.code);
+      console.error('   Error stack:', e.stack);
+      return res.status(500).json({ 
+        error: 'COUPON_ERROR', 
+        details: ['Lỗi xử lý mã giảm giá'],
+        message: process.env.NODE_ENV === 'development' ? e.message : 'Lỗi xử lý mã giảm giá'
+      });
     }
   }
   
@@ -464,7 +554,30 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
     }
   }
   
+  // Calculate total: subtotal + shipping - coupon discount - points discount
+  // Note: For freeship coupon, discountCents = shippingFeeCents, so shipping is effectively free
   const totalCents = subtotalCents + shippingFeeCents - discountCents - pointsDiscountCents; // All values in VND
+  
+  console.log('💰 Order calculation:', {
+    subtotalCents,
+    shippingFeeCents,
+    discountCents,
+    pointsDiscountCents,
+    totalCents,
+    couponCode: appliedCoupon?.code || null,
+    couponType: appliedCoupon?.type || null,
+    userId,
+    shippingFields: {
+      name: shipping.name,
+      phone: shipping.phone,
+      email: shipping.email,
+      province: shipping.province,
+      district: shipping.district,
+      ward: shipping.ward,
+      address: shipping.address
+    }
+  });
+  
   const conn = await pool.getConnection();
   
   try {
@@ -555,6 +668,33 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
     const initialStatus = 'PENDING';
     const initialPaymentStatus = 'PENDING';
     
+    // Ensure all shipping fields are strings (not undefined/null)
+    const shippingProvince = (shipping.province || shipping.city || '').toString();
+    const shippingDistrict = (shipping.district || shipping.city || '').toString();
+    const shippingWard = (shipping.ward || '').toString();
+    const shippingAddress = (shipping.address || '').toString();
+    const shippingName = (shipping.name || '').toString();
+    const shippingPhone = (shipping.phone || '').toString();
+    const shippingEmail = (shipping.email || '').toString();
+    const couponCodeValue = appliedCoupon ? (appliedCoupon.normalizedCode || appliedCoupon.code || '').toString() : null;
+    
+    console.log('📝 Inserting order with values:', {
+      userId,
+      totalCents,
+      discountCents,
+      shippingFeeCents,
+      couponCode: couponCodeValue,
+      shipping: {
+        name: shippingName,
+        phone: shippingPhone,
+        email: shippingEmail,
+        province: shippingProvince,
+        district: shippingDistrict,
+        ward: shippingWard,
+        address: shippingAddress
+      }
+    });
+    
     const [orderResult] = await conn.query(
       `INSERT INTO orders 
         (user_id, status, payment_method, payment_status, total_cents, discount_cents, shipping_fee_cents,
@@ -563,9 +703,9 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
          shipping_province, shipping_district, shipping_ward, shipping_address)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [userId, initialStatus, paymentMethod, initialPaymentStatus, totalCents, discountCents, shippingFeeCents,
-       pointsUsed, pointsDiscountCents, appliedCoupon?.code || null,
-       shipping.name, shipping.phone, shipping.email,
-       shipping.province || '', shipping.district || '', shipping.ward || '', shipping.address]
+       pointsUsed, pointsDiscountCents, couponCodeValue,
+       shippingName, shippingPhone, shippingEmail,
+       shippingProvince, shippingDistrict, shippingWard, shippingAddress]
     );
     
     const orderId = orderResult.insertId;
@@ -616,11 +756,65 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
       discountCents 
     });
   } catch (e) {
-    await conn.rollback();
-    console.error('Checkout error:', e);
-    return res.status(500).json({ error: 'Server error', details: e.message });
+    if (conn) {
+      try {
+        await conn.rollback();
+      } catch (rollbackErr) {
+        console.error('❌ Rollback error:', rollbackErr);
+      }
+    }
+    
+    console.error('❌ Checkout error:', e);
+    console.error('   Error name:', e.name);
+    console.error('   Error message:', e.message);
+    console.error('   Error code:', e.code);
+    console.error('   Error sqlState:', e.sqlState);
+    console.error('   Error sqlMessage:', e.sqlMessage);
+    console.error('   Error stack:', e.stack);
+    
+    // Check for specific database errors
+    if (e.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ 
+        error: 'DUPLICATE_ORDER',
+        message: 'Đơn hàng đã tồn tại. Vui lòng kiểm tra lại.'
+      });
+    }
+    
+    if (e.code === 'ER_NO_REFERENCED_ROW_2' || e.code === 'ER_ROW_IS_REFERENCED_2') {
+      return res.status(400).json({ 
+        error: 'INVALID_DATA',
+        message: 'Dữ liệu không hợp lệ. Vui lòng kiểm tra lại thông tin.'
+      });
+    }
+    
+    if (e.code === 'ER_BAD_FIELD_ERROR') {
+      return res.status(500).json({ 
+        error: 'DATABASE_SCHEMA_ERROR',
+        message: 'Lỗi cấu trúc database. Vui lòng liên hệ quản trị viên.'
+      });
+    }
+    
+    // Generic error response - Always include details for debugging
+    return res.status(500).json({ 
+      error: 'SERVER_ERROR', 
+      message: e.message || 'Có lỗi xảy ra khi tạo đơn hàng. Vui lòng thử lại.',
+      details: {
+        name: e.name,
+        message: e.message,
+        code: e.code,
+        sqlState: e.sqlState,
+        sqlMessage: e.sqlMessage,
+        ...(process.env.NODE_ENV === 'development' ? { stack: e.stack } : {})
+      }
+    });
   } finally {
-    conn.release();
+    if (conn) {
+      try {
+        conn.release();
+      } catch (releaseErr) {
+        console.error('❌ Connection release error:', releaseErr);
+      }
+    }
   }
 }
 
@@ -944,25 +1138,46 @@ app.patch('/admin/orders/:orderId/status', async (req, res) => {
 app.post('/orders/confirm-cod', async (req, res) => {
   const userIdHeader = req.headers['x-user-id'];
   const userId = userIdHeader ? parseInt(userIdHeader, 10) : null;
+  const { orderId: providedOrderId, email } = req.body;
   
-  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-  
-  // Find the latest PENDING COD order for this user
+  // Find order: by orderId (for guest) or by userId (for authenticated users)
   let order, orderId;
   try {
-    const [[orderData]] = await pool.query(
-      `SELECT id FROM orders 
-       WHERE user_id = ? AND payment_method = 'COD' AND status = 'PENDING' 
-       ORDER BY created_at DESC LIMIT 1`,
-      [userId]
-    );
-    
-    if (!orderData) {
-      return res.status(404).json({ error: 'No pending COD order found' });
+    if (providedOrderId) {
+      // Guest user: find by orderId and email
+      if (!email) {
+        return res.status(400).json({ error: 'Email is required for guest order confirmation' });
+      }
+      const [[orderData]] = await pool.query(
+        `SELECT id, user_id, shipping_email FROM orders 
+         WHERE id = ? AND payment_method = 'COD' AND status = 'PENDING' AND shipping_email = ?`,
+        [providedOrderId, email]
+      );
+      
+      if (!orderData) {
+        return res.status(404).json({ error: 'Order not found or already processed' });
+      }
+      
+      order = orderData;
+      orderId = order.id;
+    } else if (userId) {
+      // Authenticated user: find latest PENDING COD order
+      const [[orderData]] = await pool.query(
+        `SELECT id FROM orders 
+         WHERE user_id = ? AND payment_method = 'COD' AND status = 'PENDING' 
+         ORDER BY created_at DESC LIMIT 1`,
+        [userId]
+      );
+      
+      if (!orderData) {
+        return res.status(404).json({ error: 'No pending COD order found' });
+      }
+      
+      order = orderData;
+      orderId = order.id;
+    } else {
+      return res.status(400).json({ error: 'Either orderId (for guest) or userId (for authenticated) is required' });
     }
-    
-    order = orderData;
-    orderId = order.id;
   } catch (error) {
     console.error('Find order error:', error);
     return res.status(500).json({ error: 'Server error' });
@@ -1059,10 +1274,13 @@ app.post('/orders/confirm-cod', async (req, res) => {
       console.error('Email sending error (non-blocking):', err.message)
     );
     
-    // Add loyalty points (async, don't wait)
-    addLoyaltyPoints(userId, orderId, fullOrder.total_cents).catch(err =>
-      console.error('Loyalty points error (non-blocking):', err.message)
-    );
+    // Add loyalty points (async, don't wait) - only for authenticated users
+    const orderUserId = fullOrder.user_id;
+    if (orderUserId) {
+      addLoyaltyPoints(orderUserId, orderId, fullOrder.total_cents).catch(err =>
+        console.error('Loyalty points error (non-blocking):', err.message)
+      );
+    }
     
     console.log(`✅ COD order #${orderId} confirmed and stock reserved`);
     await lockManager.releaseLock(lockKey, lockToken);
