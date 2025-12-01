@@ -197,12 +197,13 @@ export default function DashboardPage() {
     try {
       setLoading(true);
       const [ordersRes, productsRes, customersRes] = await Promise.all([
-        api.get('/admin/orders', { params: {} }).catch(() => ({ data: [] })), // Get all orders (up to 200 limit from backend)
+        api.get('/admin/orders', { params: { page: '1', pageSize: '200' } }).catch(() => ({ data: { items: [] } })), // Get all orders (up to 200 limit from backend)
         api.get('/admin/catalog/products', { params: { pageSize: 100 } }).catch(() => ({ data: { items: [] } })),
         api.get('/admin/users', { params: { limit: 100 } }).catch(() => ({ data: [] })),
       ]);
 
-      const orders = ordersRes.data || [];
+      // Handle both old format (array) and new format (object with items)
+      const orders = Array.isArray(ordersRes.data) ? ordersRes.data : (ordersRes.data?.items || []);
       const products = productsRes.data?.items || [];
       const customers = customersRes.data || [];
 
@@ -487,9 +488,10 @@ export default function DashboardPage() {
                 </Typography>
               </Box>
             </Stack>
-            <Box sx={{ width: '100%', height: 250 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={stats.revenueChart}>
+            <Box sx={{ width: '100%', height: 250, minHeight: 250 }}>
+              {stats.revenueChart && stats.revenueChart.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={stats.revenueChart}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis 
                     dataKey="date" 
@@ -518,8 +520,15 @@ export default function DashboardPage() {
                     dot={{ fill: '#10b981', r: 5 }}
                     activeDot={{ r: 7 }}
                   />
-                </LineChart>
-              </ResponsiveContainer>
+                  </LineChart>
+                </ResponsiveContainer>
+              ) : (
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    Chưa có dữ liệu
+                  </Typography>
+                </Box>
+              )}
             </Box>
           </Paper>
         </Grid>
@@ -544,9 +553,10 @@ export default function DashboardPage() {
                 Top {Math.min(stats.categoryChart.length, 8)} danh mục
               </Typography>
             </Box>
-            <Box sx={{ width: '100%', height: 340 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
+            <Box sx={{ width: '100%', height: 340, minHeight: 340 }}>
+              {stats.categoryChart && stats.categoryChart.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
                   <Pie
                     data={stats.categoryChart.slice(0, 8)}
                     cx="50%"
@@ -574,8 +584,15 @@ export default function DashboardPage() {
                     }}
                     formatter={(value, name, props) => [`${value} SP`, props.payload.name]}
                   />
-                </PieChart>
-              </ResponsiveContainer>
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    Chưa có dữ liệu
+                  </Typography>
+                </Box>
+              )}
             </Box>
             <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 1, mt: 1 }}>
               {stats.categoryChart.slice(0, 8).map((cat, index) => {
@@ -613,9 +630,10 @@ export default function DashboardPage() {
                 Theo dõi số lượng đơn hàng trong tuần
               </Typography>
             </Box>
-            <Box sx={{ width: '100%', height: 250 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={stats.ordersChart}>
+            <Box sx={{ width: '100%', height: 250, minHeight: 250 }}>
+              {stats.ordersChart && stats.ordersChart.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={stats.ordersChart}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis 
                     dataKey="date" 
@@ -642,8 +660,15 @@ export default function DashboardPage() {
                     radius={[8, 8, 0, 0]}
                     maxBarSize={60}
                   />
-                </BarChart>
-              </ResponsiveContainer>
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    Chưa có dữ liệu
+                  </Typography>
+                </Box>
+              )}
             </Box>
           </Paper>
         </Grid>

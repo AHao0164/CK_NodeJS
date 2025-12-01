@@ -237,24 +237,54 @@ async function processVNPayCallback(query) {
           });
           
           if (!orderResponse.ok) {
-            console.error('Failed to confirm VNPay order:', await orderResponse.text());
+            const errorText = await orderResponse.text();
+            let errorData;
+            try {
+              errorData = JSON.parse(errorText);
+            } catch (e) {
+              errorData = { error: 'UNKNOWN_ERROR', message: errorText };
+            }
+            
+            // Check if order was cancelled due to out of stock
+            if (errorData.error === 'OUT_OF_STOCK' && errorData.cancelled) {
+              console.error(`❌ VNPay order #${orderId} cancelled - Out of stock:`, errorData.message);
+              return {
+                success: false,
+                message: errorData.message || 'Sản phẩm đã hết hàng. Đơn hàng đã bị hủy.',
+                code: 'OUT_OF_STOCK',
+                orderId: errorData.orderId,
+                cancelled: true
+              };
+            }
+            
+            console.error('Failed to confirm VNPay order:', errorText);
+            return {
+              success: false,
+              message: errorData.message || 'Không thể xác nhận đơn hàng',
+              code: errorData.error || 'CONFIRM_FAILED'
+            };
           } else {
+            const orderData = await orderResponse.json();
             console.log(`✅ VNPay order #${orderId} confirmed and stock reserved`);
+            return { 
+              success: true,
+              message: "Thanh toán thành công", 
+              data: {
+                orderId: query.vnp_TxnRef,
+                amount: parseInt(query.vnp_Amount) / 100,
+                transactionNo: query.vnp_TransactionNo,
+                bankCode: query.vnp_BankCode
+              }
+            };
           }
         } catch (orderErr) {
           console.error('Error calling order service:', orderErr.message);
+          return {
+            success: false,
+            message: 'Lỗi kết nối đến hệ thống đơn hàng',
+            code: 'SERVICE_ERROR'
+          };
         }
-        
-        return { 
-          success: true,
-          message: "Thanh toán thành công", 
-          data: {
-            orderId: query.vnp_TxnRef,
-            amount: parseInt(query.vnp_Amount) / 100,
-            transactionNo: query.vnp_TransactionNo,
-            bankCode: query.vnp_BankCode
-          }
-        };
       } else {
         // Payment failed - Cancel order
         const orderId = query.vnp_TxnRef;

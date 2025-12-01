@@ -35,3 +35,5 @@ FROM information_schema.tables
 WHERE table_schema = 'catalog_db' 
 AND table_name = 'guest_comments';
 
+
+

@@ -6,6 +6,7 @@ import axios from 'axios';
 import axiosRetry from 'axios-retry';
 import CircuitBreaker from 'opossum';
 import RedisLockManager from '../shared/RedisLockManager.js';
+import RedisEventBus from '../shared/RedisEventBus.js';
 
 const app = express();
 app.use(cors());
@@ -14,6 +15,9 @@ app.use(morgan('dev'));
 
 // Initialize Redis Lock Manager
 const lockManager = new RedisLockManager();
+
+// Initialize Redis Event Bus for async communication
+const eventBus = new RedisEventBus();
 
 const PORT = process.env.PORT || 3004;
 const PAYMENT_SERVICE_URL = process.env.PAYMENT_SERVICE_URL || 'http://localhost:3005';
@@ -249,6 +253,22 @@ async function recordStatusHistory(orderId, oldStatus, newStatus, changedBy = 'S
       'INSERT INTO order_status_history (order_id, old_status, new_status, changed_by, notes) VALUES (?, ?, ?, ?, ?)',
       [orderId, oldStatus, newStatus, changedBy, notes]
     );
+    
+    // 📤 Publish order.status_changed event
+    try {
+      await eventBus.publish('order.status_changed', {
+        orderId,
+        oldStatus,
+        newStatus,
+        changedBy,
+        notes,
+        timestamp: new Date().toISOString()
+      });
+      console.log(`📤 Published order.status_changed event for order #${orderId}: ${oldStatus} → ${newStatus}`);
+    } catch (error) {
+      console.error('Failed to publish order.status_changed event:', error.message);
+      // Non-critical, don't fail the operation
+    }
   } catch (error) {
     // Log error but don't fail the main operation
     console.error(`Failed to record status history for order ${orderId}:`, error.message);
@@ -584,66 +604,63 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
     await conn.beginTransaction();
     
     // 🔒 STOCK LOGIC theo payment method:
-    // - VNPay: TRỪ STOCK NGAY khi tạo order (để user không phải chờ)
-    // - COD: Chỉ CHECK stock, trừ sau khi xác nhận OTP
+    // - VNPay: Chỉ CHECK stock khi checkout, trừ sau khi thanh toán thành công
+    // - COD: Chỉ CHECK stock khi checkout, trừ sau khi xác nhận OTP
+    // Stock chỉ được trừ khi thanh toán xong, không trừ khi thêm vào giỏ hàng
     
-    if (paymentMethod === 'VNPAY') {
-      // VNPay: Reserve inventory immediately
+    // ✅ Check stock availability for all items BEFORE creating order
+    // This ensures customer cannot checkout if cart quantity exceeds available stock
+    const stockErrors = [];
+    for (const item of items) {
       try {
-        const reservePayload = {
-          items: items.map(item => ({
-            productId: item.productId,
-            quantity: item.quantity
-          }))
-        };
+        const product = await catalogBreaker.fire(`${CATALOG_SERVICE_URL}/catalog/products/${item.productId}`);
         
-        const reserveResponse = await httpClient.post(
-          `${CATALOG_SERVICE_URL}/catalog/inventory/reserve`,
-          reservePayload
-        );
-        
-        if (!reserveResponse.data.success) {
-          throw new Error(reserveResponse.data.error || 'Không đủ hàng');
+        // Handle circuit breaker errors
+        if (!product || product.error === 'SERVICE_UNAVAILABLE') {
+          stockErrors.push(`Không thể kiểm tra tồn kho cho sản phẩm #${item.productId}`);
+          continue;
         }
         
-        console.log(`✅ Reserved inventory for VNPay order (user ${userId})`);
-      } catch (stockError) {
-        await conn.rollback();
-        conn.release();
-        
-        console.error('VNPay stock reservation failed:', stockError.message);
-        return res.status(400).json({ 
-          error: 'Sản phẩm đã hết hàng hoặc không đủ số lượng', 
-          message: 'Vui lòng giảm số lượng hoặc chọn sản phẩm khác'
-        });
-      }
-    } else {
-      // COD: Just check availability, don't reserve yet
-      for (const item of items) {
-        try {
-          const product = await catalogBreaker.fire(`${CATALOG_SERVICE_URL}/catalog/products/${item.productId}`);
-          
-          if (!product || product.stock < item.quantity) {
-            await conn.rollback();
-            conn.release();
-            return res.status(400).json({
-              error: 'OUT_OF_STOCK',
-              message: `Sản phẩm "${product?.name || item.productId}" không đủ hàng. Còn ${product?.stock || 0}, yêu cầu ${item.quantity}`
-            });
-          }
-        } catch (productError) {
-          console.error(`Error checking stock for product ${item.productId}:`, productError.message);
-          await conn.rollback();
-          conn.release();
-          return res.status(500).json({
-            error: 'STOCK_CHECK_FAILED',
-            message: 'Không thể kiểm tra tồn kho. Vui lòng thử lại.'
-          });
+        // Check if product exists
+        if (!product || !product.id) {
+          stockErrors.push(`Sản phẩm #${item.productId} không tồn tại`);
+          continue;
         }
+        
+        // Get stock - can be from product.stock or inventory table
+        const availableStock = product.stock !== undefined ? (product.stock || 0) : 0;
+        const requestedQuantity = item.quantity || 0;
+        
+        console.log(`🔍 Stock check for product #${item.productId} (${product.name || 'N/A'}): available=${availableStock}, requested=${requestedQuantity}`);
+        
+        if (availableStock < requestedQuantity) {
+          stockErrors.push(
+            `"${product.name || `Sản phẩm #${item.productId}`}" không đủ hàng. ` +
+            `Còn ${availableStock} sản phẩm, bạn yêu cầu ${requestedQuantity}`
+          );
+        }
+      } catch (productError) {
+        console.error(`❌ Error checking stock for product ${item.productId}:`, productError.message);
+        console.error('   Error stack:', productError.stack);
+        stockErrors.push(`Không thể kiểm tra tồn kho cho sản phẩm #${item.productId}`);
       }
-      
-      console.log(`✅ Stock availability checked for COD order (user ${userId})`);
     }
+    
+    // If any stock errors, return error with details
+    if (stockErrors.length > 0) {
+      await conn.rollback();
+      conn.release();
+      console.log(`❌ Checkout blocked - Stock errors:`, stockErrors);
+      return res.status(400).json({
+        error: 'OUT_OF_STOCK',
+        message: 'Một số sản phẩm trong giỏ hàng không đủ số lượng',
+        details: stockErrors
+      });
+    }
+    
+    console.log(`✅ All stock checks passed for ${items.length} items`);
+    
+    console.log(`✅ Stock availability checked for ${paymentMethod} order (user ${userId}) - stock will be deducted after payment confirmation`);
     
     // Fetch product details for order_items using circuit breaker
     const productDetails = await Promise.all(
@@ -663,8 +680,9 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
     
     // Tất cả orders đều bắt đầu với PENDING
     // Stock chỉ trừ khi thanh toán thành công:
-    // - COD: Sau khi xác nhận OTP
-    // - VNPay: Sau khi nhận IPN callback
+    // - COD: Sau khi xác nhận OTP (trong /orders/confirm-cod)
+    // - VNPay: Sau khi nhận IPN callback (trong /orders/confirm-vnpay)
+    // KHÔNG trừ stock khi checkout, chỉ check availability
     const initialStatus = 'PENDING';
     const initialPaymentStatus = 'PENDING';
     
@@ -728,6 +746,29 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
     );
     
     await conn.commit();
+    
+    // 📤 Publish order.created event
+    try {
+      await eventBus.publish('order.created', {
+        orderId,
+        userId,
+        status: initialStatus,
+        paymentMethod,
+        totalCents,
+        discountCents,
+        shippingFeeCents,
+        items: productDetails.map(it => ({
+          productId: it.productId,
+          quantity: it.quantity,
+          priceCents: it.priceCents
+        })),
+        createdAt: new Date().toISOString()
+      });
+      console.log(`📤 Published order.created event for order #${orderId}`);
+    } catch (error) {
+      console.error('Failed to publish order.created event:', error.message);
+      // Non-critical, don't fail the order
+    }
     
     // Update orderId in loyalty points history (if points were used)
     if (pointsUsed > 0 && userId) {
@@ -1035,18 +1076,56 @@ app.use(requireAdmin);
 
 // Admin: list recent orders
 app.get('/admin/orders', async (req, res) => {
-  const { status } = req.query;
-  let query = 'SELECT * FROM orders';
-  const params = [];
-  
-  if (status && status !== 'ALL') {
-    query += ' WHERE status = ?';
-    params.push(status);
+  try {
+    const { status, page = '1', pageSize = '20', search } = req.query;
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const pageSizeNum = Math.min(Math.max(parseInt(pageSize, 10) || 20, 1), 100); // Max 100 per page
+    const offset = (pageNum - 1) * pageSizeNum;
+    
+    let whereClauses = [];
+    const params = [];
+    
+    // Filter by status
+    if (status && status !== 'ALL') {
+      whereClauses.push('status = ?');
+      params.push(status);
+    }
+    
+    // Search by order ID or user ID
+    if (search && search.trim()) {
+      const searchTerm = `%${search.trim()}%`;
+      whereClauses.push('(id LIKE ? OR user_id LIKE ? OR shipping_name LIKE ? OR shipping_phone LIKE ? OR shipping_email LIKE ?)');
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+    }
+    
+    const whereSql = whereClauses.length > 0 ? 'WHERE ' + whereClauses.join(' AND ') : '';
+    
+    // Get total count for pagination
+    const [[countResult]] = await pool.query(
+      `SELECT COUNT(*) as total FROM orders ${whereSql}`,
+      params
+    );
+    const total = countResult?.total || 0;
+    
+    // Get orders with pagination, sorted by created_at DESC (newest first)
+    const [orders] = await pool.query(
+      `SELECT * FROM orders ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      [...params, pageSizeNum, offset]
+    );
+    
+    return res.json({
+      items: orders,
+      pagination: {
+        page: pageNum,
+        pageSize: pageSizeNum,
+        total,
+        totalPages: Math.ceil(total / pageSizeNum)
+      }
+    });
+  } catch (error) {
+    console.error('Get admin orders error:', error);
+    return res.status(500).json({ error: 'Server error' });
   }
-  
-  query += ' ORDER BY id DESC LIMIT 200';
-  const [orders] = await pool.query(query, params);
-  return res.json(orders);
 });
 
 // Admin: get order with items
@@ -1230,13 +1309,33 @@ app.post('/orders/confirm-cod', async (req, res) => {
         );
         
         if (!reserveResponse.data.success) {
-          // Out of stock - cancel order
-          await pool.query('UPDATE orders SET status = ? WHERE id = ?', ['CANCELLED', orderId]);
+          // Out of stock - cancel order with proper history and event
+          await pool.query('UPDATE orders SET status = ?, payment_status = ? WHERE id = ?', ['CANCELLED', 'FAILED', orderId]);
+          
+          // Record status change in history
+          await recordStatusHistory(orderId, 'PENDING', 'CANCELLED', 'SYSTEM', 'Hủy đơn do hết hàng sau khi xác nhận COD');
+          
+          // 📤 Publish order.status_changed event
+          try {
+            await eventBus.publish('order.status_changed', {
+              orderId,
+              oldStatus: 'PENDING',
+              newStatus: 'CANCELLED',
+              changedBy: 'SYSTEM',
+              notes: 'Hủy đơn do hết hàng sau khi xác nhận COD',
+              timestamp: new Date().toISOString()
+            });
+          } catch (error) {
+            console.error('Failed to publish order.status_changed event:', error.message);
+          }
+          
           await lockManager.releaseLock(lockKey, lockToken);
-          console.log(`❌ Order #${orderId} cancelled - Out of stock`);
+          console.log(`❌ COD order #${orderId} cancelled - Out of stock after confirmation`);
           return res.status(400).json({ 
             error: 'OUT_OF_STOCK',
-            message: 'Sản phẩm đã hết hàng. Đơn hàng đã bị hủy.' 
+            message: 'Sản phẩm đã hết hàng. Đơn hàng đã bị hủy.',
+            orderId,
+            cancelled: true
           });
         }
         
@@ -1255,8 +1354,25 @@ app.post('/orders/confirm-cod', async (req, res) => {
       ['CONFIRMED', 'PAID', orderId]
     );
     
-    // Record status change in history
+    // Record status change in history (will publish order.status_changed event)
     await recordStatusHistory(orderId, 'PENDING', 'CONFIRMED', 'SYSTEM', 'Xác nhận thanh toán COD thành công');
+    
+    // 📤 Publish order.payment_completed event
+    try {
+      await eventBus.publish('order.payment_completed', {
+        orderId,
+        paymentMethod: 'COD',
+        status: 'CONFIRMED',
+        paymentStatus: 'PAID',
+        userId: fullOrder?.user_id || null,
+        totalCents: fullOrder?.total_cents || 0,
+        timestamp: new Date().toISOString()
+      });
+      console.log(`📤 Published order.payment_completed event for COD order #${orderId}`);
+    } catch (error) {
+      console.error('Failed to publish order.payment_completed event:', error.message);
+      // Non-critical
+    }
     
     // Get full order data for email AFTER update to ensure we have latest data
     const [[fullOrder]] = await pool.query(
@@ -1328,8 +1444,66 @@ app.post('/orders/confirm-vnpay', async (req, res) => {
       return res.json({ ok: true, message: 'Order already processed' });
     }
     
-    // ℹ️ Stock đã được trừ khi tạo order VNPay
-    // Không cần reserve lại ở đây, chỉ cần update status thành CONFIRMED
+    // Get order items for stock reservation
+    const [items] = await pool.query(
+      'SELECT product_id, quantity FROM order_items WHERE order_id = ?',
+      [orderId]
+    );
+    
+    // Reserve inventory (trừ stock) - ĐÃ CÓ LOCK BÊN TRONG
+    if (items.length > 0) {
+      try {
+        const reservePayload = {
+          items: items.map(item => ({
+            productId: item.product_id,
+            quantity: item.quantity
+          }))
+        };
+        
+        const reserveResponse = await httpClient.post(
+          `${CATALOG_SERVICE_URL}/catalog/inventory/reserve`,
+          reservePayload
+        );
+        
+        if (!reserveResponse.data.success) {
+          // Out of stock - cancel order with proper history and event
+          await pool.query('UPDATE orders SET status = ?, payment_status = ? WHERE id = ?', ['CANCELLED', 'FAILED', orderId]);
+          
+          // Record status change in history
+          await recordStatusHistory(orderId, 'PENDING', 'CANCELLED', 'SYSTEM', 'Hủy đơn do hết hàng sau khi thanh toán VNPay thành công');
+          
+          // 📤 Publish order.status_changed event
+          try {
+            await eventBus.publish('order.status_changed', {
+              orderId,
+              oldStatus: 'PENDING',
+              newStatus: 'CANCELLED',
+              changedBy: 'SYSTEM',
+              notes: 'Hủy đơn do hết hàng sau khi thanh toán VNPay thành công',
+              timestamp: new Date().toISOString()
+            });
+          } catch (error) {
+            console.error('Failed to publish order.status_changed event:', error.message);
+          }
+          
+          await lockManager.releaseLock(lockKey, lockToken);
+          console.log(`❌ VNPay order #${orderId} cancelled - Out of stock after payment`);
+          return res.status(400).json({ 
+            error: 'OUT_OF_STOCK',
+            message: 'Sản phẩm đã hết hàng. Đơn hàng đã bị hủy và sẽ được hoàn tiền.',
+            orderId,
+            cancelled: true
+          });
+        }
+        
+        console.log(`✅ Reserved inventory for VNPay order #${orderId}`);
+      } catch (inventoryError) {
+        console.error('Failed to reserve inventory:', inventoryError.message);
+        await pool.query('UPDATE orders SET status = ? WHERE id = ?', ['CANCELLED', orderId]);
+        await lockManager.releaseLock(lockKey, lockToken);
+        return res.status(500).json({ error: 'Failed to reserve inventory' });
+      }
+    }
     
     // Get full order data for email
     const [[fullOrder]] = await pool.query(
@@ -1348,8 +1522,28 @@ app.post('/orders/confirm-vnpay', async (req, res) => {
       ['CONFIRMED', 'PAID', orderId]
     );
     
-    // Record status change in history
+    // Record status change in history (will publish order.status_changed event)
     await recordStatusHistory(orderId, 'PENDING', 'CONFIRMED', 'SYSTEM', `Thanh toán VNPay thành công (TxnNo: ${transactionNo || 'N/A'})`);
+    
+    // 📤 Publish order.payment_completed event
+    try {
+      await eventBus.publish('order.payment_completed', {
+        orderId,
+        paymentMethod: 'VNPAY',
+        status: 'CONFIRMED',
+        paymentStatus: 'PAID',
+        transactionNo,
+        bankCode,
+        amount,
+        userId: fullOrder?.user_id || null,
+        totalCents: fullOrder?.total_cents || 0,
+        timestamp: new Date().toISOString()
+      });
+      console.log(`📤 Published order.payment_completed event for VNPay order #${orderId}`);
+    } catch (error) {
+      console.error('Failed to publish order.payment_completed event:', error.message);
+      // Non-critical
+    }
     
     // Get userId from order
     const userId = fullOrder.user_id;
@@ -1382,44 +1576,54 @@ app.post('/orders/:orderId/cancel-vnpay', async (req, res) => {
     
     console.log(`🔍 Attempting to cancel VNPay order #${orderId}`);
     
-    // Get order items to restore stock
-    const [items] = await pool.query(
-      'SELECT product_id, quantity FROM order_items WHERE order_id = ?',
-      [orderId]
-    );
-    
-    console.log(`📦 Found ${items.length} items to restore for order #${orderId}:`, items);
-    
-    // Restore stock if any items exist
-    if (items.length > 0) {
-      try {
-        const releasePayload = {
-          items: items.map(item => ({
-            productId: item.product_id,
-            quantity: item.quantity
-          }))
-        };
-        
-        console.log(`🔄 Calling catalog-service to release stock:`, releasePayload);
-        
-        const releaseResponse = await httpClient.post(
-          `${CATALOG_SERVICE_URL}/catalog/inventory/release`,
-          releasePayload
-        );
-        
-        console.log(`✅ Stock restored for cancelled VNPay order #${orderId}`, releaseResponse.data);
-      } catch (releaseError) {
-        console.error(`❌ Failed to restore stock for order #${orderId}:`, releaseError.message);
-        if (releaseError.response) {
-          console.error(`Response status: ${releaseError.response.status}`, releaseError.response.data);
-        }
-        // Continue with cancellation even if stock restoration fails
-      }
-    }
-    
     // Get current status before cancelling
     const [[currentOrder]] = await pool.query('SELECT status FROM orders WHERE id = ?', [orderId]);
     const oldStatus = currentOrder?.status || 'PENDING';
+    
+    // ✅ RESTORE STOCK:
+    // Stock chỉ được trừ khi thanh toán thành công (confirm VNPay)
+    // - PENDING: Không restore (chưa trừ stock - chỉ check khi checkout)
+    // - CONFIRMED: Phải restore (đã trừ khi confirm VNPay)
+    const needRestore = currentOrder?.status === 'CONFIRMED';
+    
+    if (needRestore) {
+      // Get order items to restore stock
+      const [items] = await pool.query(
+        'SELECT product_id, quantity FROM order_items WHERE order_id = ?',
+        [orderId]
+      );
+      
+      console.log(`📦 Found ${items.length} items to restore for order #${orderId}:`, items);
+      
+      // Restore stock if any items exist
+      if (items.length > 0) {
+        try {
+          const releasePayload = {
+            items: items.map(item => ({
+              productId: item.product_id,
+              quantity: item.quantity
+            }))
+          };
+          
+          console.log(`🔄 Calling catalog-service to release stock:`, releasePayload);
+          
+          const releaseResponse = await httpClient.post(
+            `${CATALOG_SERVICE_URL}/catalog/inventory/release`,
+            releasePayload
+          );
+          
+          console.log(`✅ Stock restored for cancelled VNPay order #${orderId}`, releaseResponse.data);
+        } catch (releaseError) {
+          console.error(`❌ Failed to restore stock for order #${orderId}:`, releaseError.message);
+          if (releaseError.response) {
+            console.error(`Response status: ${releaseError.response.status}`, releaseError.response.data);
+          }
+          // Continue with cancellation even if stock restoration fails
+        }
+      }
+    } else {
+      console.log(`ℹ️ VNPay order #${orderId} is ${oldStatus} - No stock to restore (stock not deducted yet)`);
+    }
     
     // Update order status to CANCELLED
     await pool.query(
@@ -1439,7 +1643,7 @@ app.post('/orders/:orderId/cancel-vnpay', async (req, res) => {
   }
 });
 
-// User cancel order (only PENDING status)
+// User cancel order (PENDING or CONFIRMED status)
 app.patch('/orders/:orderId/cancel', async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -1448,29 +1652,40 @@ app.patch('/orders/:orderId/cancel', async (req, res) => {
     
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
     
-    // Check if order exists and belongs to user
-    const [[order]] = await pool.query('SELECT id, user_id, status FROM orders WHERE id = ?', [orderId]);
+    // Check if order exists and belongs to user (get payment_method in same query)
+    const [[order]] = await pool.query(
+      'SELECT id, user_id, status, payment_method FROM orders WHERE id = ?', 
+      [orderId]
+    );
     if (!order) return res.status(404).json({ error: 'Đơn hàng không tồn tại' });
     if (order.user_id !== userId) return res.status(403).json({ error: 'Không có quyền hủy đơn hàng này' });
     
-    // Allow cancel if status is PENDING or CONFIRMED
-    if (order.status !== 'PENDING' && order.status !== 'CONFIRMED') {
-      return res.status(400).json({ error: 'Chỉ có thể hủy đơn hàng đang chờ xác nhận hoặc đã xác nhận (chưa ship)' });
+    // Prevent cancelling delivered orders
+    if (order.status === 'DELIVERED') {
+      return res.status(400).json({ 
+        error: 'CANNOT_CANCEL_DELIVERED',
+        message: 'Không thể hủy đơn hàng đã giao thành công' 
+      });
     }
     
-    // Get payment method to determine if stock needs restoration
-    const [[orderDetails]] = await pool.query(
-      'SELECT payment_method FROM orders WHERE id = ?', 
-      [orderId]
-    );
+    // Allow cancel if status is PENDING or CONFIRMED (not SHIPPING or DELIVERED)
+    if (order.status !== 'PENDING' && order.status !== 'CONFIRMED') {
+      return res.status(400).json({ 
+        error: 'CANNOT_CANCEL',
+        message: 'Chỉ có thể hủy đơn hàng đang chờ xác nhận hoặc đã xác nhận (chưa ship)' 
+      });
+    }
+    
+    const oldStatus = order.status;
     
     // ✅ RESTORE STOCK:
-    // - VNPay PENDING: Phải restore (đã trừ khi tạo order)
-    // - VNPay CONFIRMED: Phải restore (đã trừ khi tạo order)
-    // - COD PENDING: Không restore (chưa trừ stock)
-    // - COD CONFIRMED: Phải restore (đã trừ sau OTP)
-    const needRestore = (orderDetails.payment_method === 'VNPAY') || 
-                        (orderDetails.payment_method === 'COD' && order.status === 'CONFIRMED');
+    // Stock chỉ được trừ khi thanh toán thành công (confirm):
+    // - VNPay PENDING: Không restore (chưa trừ stock - chỉ check khi checkout)
+    // - VNPay CONFIRMED: Phải restore (đã trừ khi confirm VNPay)
+    // - COD PENDING: Không restore (chưa trừ stock - chỉ check khi checkout)
+    // - COD CONFIRMED: Phải restore (đã trừ khi confirm COD)
+    // Chỉ restore stock nếu order đã CONFIRMED (đã trừ stock rồi)
+    const needRestore = order.status === 'CONFIRMED';
     
     if (needRestore) {
       const [items] = await pool.query('SELECT product_id, quantity FROM order_items WHERE order_id = ?', [orderId]);
@@ -1481,28 +1696,36 @@ app.patch('/orders/:orderId/cancel', async (req, res) => {
             productId: item.product_id, 
             quantity: item.quantity 
           }));
-          await httpClient.post(`${CATALOG_SERVICE_URL}/catalog/inventory/release`, {
+          const releaseResponse = await httpClient.post(`${CATALOG_SERVICE_URL}/catalog/inventory/release`, {
             items: releaseItems
           });
-          console.log(`✅ Restored stock for cancelled ${orderDetails.payment_method} order #${orderId} (${order.status})`);
+          
+          if (!releaseResponse.data || !releaseResponse.data.success) {
+            console.error(`❌ Stock release returned failure for order #${orderId}`);
+            return res.status(500).json({ 
+              error: 'STOCK_RESTORE_FAILED',
+              message: 'Không thể hoàn lại stock. Vui lòng thử lại hoặc liên hệ hỗ trợ.' 
+            });
+          }
+          
+          console.log(`✅ User cancelled ${order.payment_method} ${order.status} order #${orderId} - Restored ${items.length} products`);
         } catch (e) {
           console.error(`❌ Failed to restore stock for order #${orderId}:`, e.message);
-          // Continue cancellation even if stock restoration fails
+          return res.status(500).json({ 
+            error: 'STOCK_RESTORE_FAILED',
+            message: 'Không thể hoàn lại stock. Vui lòng thử lại hoặc liên hệ hỗ trợ.' 
+          });
         }
       }
     } else {
-      console.log(`ℹ️ Order #${orderId} is COD PENDING - no stock to restore`);
+      console.log(`ℹ️ User cancelled ${order.payment_method} ${order.status} order #${orderId} - No stock to restore`);
     }
-    
-    // Get current status
-    const [[currentOrder]] = await pool.query('SELECT status FROM orders WHERE id = ?', [orderId]);
-    const oldStatus = currentOrder?.status || 'PENDING';
     
     // Update status to CANCELLED (keep payment_status as is: PENDING or FAILED)
     await pool.query('UPDATE orders SET status = ? WHERE id = ?', ['CANCELLED', orderId]);
     
     // Record status change in history
-    await recordStatusHistory(orderId, oldStatus, 'CANCELLED', userId ? `USER_${userId}` : 'GUEST', 'Người dùng hủy đơn hàng');
+    await recordStatusHistory(orderId, oldStatus, 'CANCELLED', `USER_${userId}`, 'Người dùng hủy đơn hàng');
     
     return res.json({ ok: true, message: 'Đã hủy đơn hàng thành công' });
   } catch (error) {
@@ -1751,11 +1974,15 @@ app.get('/health', async (req, res) => {
 });
 
 // Connect to Redis on startup
-lockManager.connect().then(() => {
+Promise.all([
+  lockManager.connect(),
+  eventBus.connect()
+]).then(() => {
   console.log('✅ Order service Redis lock manager ready');
+  console.log('✅ Order service Redis event bus ready');
 }).catch(err => {
   console.error('❌ Redis connection failed:', err);
-  console.warn('⚠️ Service will run WITHOUT distributed locks');
+  console.warn('⚠️ Service will run WITHOUT distributed locks and event bus');
 });
 
 app.listen(PORT, () => {

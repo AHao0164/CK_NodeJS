@@ -63,21 +63,23 @@ app.post('/cart/items', async (req, res) => {
   
   try {
     // Validate stock availability
+    // ⚠️ CHỈ CHECK số lượng đang thêm, KHÔNG tính số lượng đã có trong giỏ
+    // Stock sẽ được check lại khi checkout và chỉ trừ khi thanh toán xong
     const productRes = await axios.get(`${CATALOG_SERVICE_URL}/catalog/products/${productId}`);
     const product = productRes.data;
     const availableStock = product.stock || 0;
     
-    // Check current cart quantity
-    const [[cartItem]] = await pool.query(
-      'SELECT quantity FROM cart_items WHERE user_id = ? AND product_id = ?',
-      [userId, productId]
-    );
-    const currentQuantityInCart = cartItem ? cartItem.quantity : 0;
-    const requestedTotalQuantity = currentQuantityInCart + quantity;
-    
-    if (requestedTotalQuantity > availableStock) {
+    // Chỉ check số lượng đang thêm có <= stock hiện tại không
+    if (quantity > availableStock) {
       return res.status(400).json({ 
-        error: `Không đủ hàng trong kho. Chỉ còn ${availableStock} sản phẩm (bạn đã có ${currentQuantityInCart} trong giỏ)` 
+        error: `Không đủ hàng trong kho. Chỉ còn ${availableStock} sản phẩm` 
+      });
+    }
+    
+    // Nếu hết hàng
+    if (availableStock === 0) {
+      return res.status(400).json({ 
+        error: 'Sản phẩm đã hết hàng' 
       });
     }
     

@@ -122,14 +122,33 @@ export default function Products() {
 		const discountPercent = Number(p.discount_percent || 0);
 		const finalPrice = Math.round(originalPrice * (100 - discountPercent) / 100);
 		
+		// ✅ Mua ngay: Chuyển thẳng đến checkout, không qua giỏ hàng
 		if (token) {
 			try {
+				// Thêm vào giỏ để có item trong cart
 				await addItemToCart(api, { 
 					productId: p.id, 
 					quantity: 1, 
 					priceCents: finalPrice // Use discounted price
 				})
-				navigate('/cart')
+				await refreshCart()
+				
+				// Lấy cart mới để có item vừa thêm
+				const cartData = await api.get('/cart').then(r => r.data)
+				const addedItem = cartData?.items?.find(item => item.product_id === p.id)
+				
+				if (addedItem) {
+					// Chuyển đến checkout với item vừa thêm được chọn
+					navigate('/checkout', {
+						state: {
+							selectedItems: [addedItem],
+							selectedItemIds: [addedItem.id]
+						}
+					})
+				} else {
+					// Fallback: chuyển đến cart nếu không tìm thấy item
+					navigate('/cart')
+				}
 			} catch (e) {
 				toast.show('❌ Lỗi khi thêm vào giỏ hàng', { type: 'error' })
 			}

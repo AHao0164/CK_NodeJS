@@ -10,6 +10,7 @@ import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import { Strategy as FacebookStrategy } from 'passport-facebook';
 import crypto from 'crypto';
 import RedisLockManager from '../shared/RedisLockManager.js';
+import { setupOrderEventHandlers } from './eventHandlers.js';
 
 const app = express();
 app.disable('etag'); // Disable ETag to prevent 304 responses
@@ -1724,10 +1725,28 @@ app.post('/auth/verify-cod-otp', async (req, res) => {
       
       if (!orderResponse.ok) {
         const errorText = await orderResponse.text();
+        let errorData;
+        try {
+          errorData = JSON.parse(errorText);
+        } catch (e) {
+          errorData = { error: 'UNKNOWN_ERROR', message: errorText };
+        }
+        
+        // Check if order was cancelled due to out of stock
+        if (errorData.error === 'OUT_OF_STOCK' && errorData.cancelled) {
+          console.error(`❌ COD order #${orderId} cancelled - Out of stock:`, errorData.message);
+          return res.status(400).json({ 
+            error: 'OUT_OF_STOCK',
+            message: errorData.message || 'Sản phẩm đã hết hàng. Đơn hàng đã bị hủy.',
+            orderId: errorData.orderId,
+            cancelled: true
+          });
+        }
+        
         console.error('Failed to confirm COD order:', errorText);
         return res.status(500).json({ 
           error: 'Failed to confirm order',
-          message: process.env.NODE_ENV === 'development' ? errorText : 'Server error'
+          message: errorData.message || (process.env.NODE_ENV === 'development' ? errorText : 'Server error')
         });
       } else {
         const result = await orderResponse.json();
@@ -2509,7 +2528,56 @@ app.post('/auth/add-loyalty-points', async (req, res) => {
   }
 });
 
-// Get user loyalty points
+// Calculate tier based on total earned points (from history)
+function calculateTier(totalEarnedPoints) {
+  if (totalEarnedPoints >= 5000) {
+    return {
+      name: 'PLATINUM',
+      label: 'Bạch Kim',
+      minPoints: 5000,
+      nextTierPoints: null, // Highest tier
+      color: '#8B5CF6', // Purple
+      bgColor: 'from-purple-50 to-indigo-50',
+      borderColor: 'border-purple-200',
+      icon: '💎'
+    };
+  } else if (totalEarnedPoints >= 2000) {
+    return {
+      name: 'GOLD',
+      label: 'Vàng',
+      minPoints: 2000,
+      nextTierPoints: 5000,
+      color: '#F59E0B', // Amber
+      bgColor: 'from-amber-50 to-yellow-50',
+      borderColor: 'border-amber-200',
+      icon: '🥇'
+    };
+  } else if (totalEarnedPoints >= 500) {
+    return {
+      name: 'SILVER',
+      label: 'Bạc',
+      minPoints: 500,
+      nextTierPoints: 2000,
+      color: '#6B7280', // Gray
+      bgColor: 'from-gray-50 to-slate-50',
+      borderColor: 'border-gray-200',
+      icon: '🥈'
+    };
+  } else {
+    return {
+      name: 'BRONZE',
+      label: 'Đồng',
+      minPoints: 0,
+      nextTierPoints: 500,
+      color: '#CD7F32', // Bronze
+      bgColor: 'from-orange-50 to-amber-50',
+      borderColor: 'border-orange-200',
+      icon: '🥉'
+    };
+  }
+}
+
+// Get user loyalty points with tier information
 app.get('/auth/loyalty-points', async (req, res) => {
   try {
     const userId = req.headers['x-user-id'];
@@ -2526,10 +2594,45 @@ app.get('/auth/loyalty-points', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    // Calculate total earned points from history (sum of all EARNED points)
+    const [[earnedResult]] = await pool.query(
+      'SELECT COALESCE(SUM(points), 0) as total_earned FROM loyalty_points_history WHERE user_id = ? AND type = ? AND points > 0',
+      [userId, 'EARNED']
+    );
+    const totalEarnedPoints = earnedResult?.total_earned || 0;
+
+    // Calculate current tier
+    const tier = calculateTier(totalEarnedPoints);
+    
+    // Calculate progress to next tier
+    let progress = 0;
+    let pointsToNextTier = 0;
+    if (tier.nextTierPoints !== null) {
+      const pointsInCurrentTier = totalEarnedPoints - tier.minPoints;
+      const pointsNeededForNextTier = tier.nextTierPoints - tier.minPoints;
+      progress = Math.min(100, Math.round((pointsInCurrentTier / pointsNeededForNextTier) * 100));
+      pointsToNextTier = tier.nextTierPoints - totalEarnedPoints;
+    } else {
+      progress = 100; // Highest tier
+    }
+
     return res.json({ 
       points: user.loyalty_points || 0,
       // 1 point = 1,000 VND
-      pointsValue: (user.loyalty_points || 0) * 1000
+      pointsValue: (user.loyalty_points || 0) * 1000,
+      tier: {
+        name: tier.name,
+        label: tier.label,
+        icon: tier.icon,
+        color: tier.color,
+        bgColor: tier.bgColor,
+        borderColor: tier.borderColor
+      },
+      totalEarnedPoints: totalEarnedPoints,
+      progress: progress,
+      pointsToNextTier: pointsToNextTier > 0 ? pointsToNextTier : null,
+      nextTierName: tier.nextTierPoints ? (tier.nextTierPoints === 500 ? 'SILVER' : tier.nextTierPoints === 2000 ? 'GOLD' : 'PLATINUM') : null,
+      nextTierLabel: tier.nextTierPoints ? (tier.nextTierPoints === 500 ? 'Bạc' : tier.nextTierPoints === 2000 ? 'Vàng' : 'Bạch Kim') : null
     });
   } catch (e) {
     console.error('Get loyalty points error:', e);
@@ -2736,12 +2839,17 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// Connect to Redis on startup
-lockManager.connect().then(() => {
+// Connect to Redis on startup and setup event handlers
+Promise.all([
+  lockManager.connect(),
+  setupOrderEventHandlers().then(() => {
+    console.log('✅ Auth service event handlers ready');
+  })
+]).then(() => {
   console.log('✅ Auth service Redis lock manager ready');
 }).catch(err => {
   console.error('❌ Redis connection failed:', err);
-  console.warn('⚠️ Service will run WITHOUT rate limiting');
+  console.warn('⚠️ Service will run WITHOUT rate limiting and event handlers');
 });
 
 app.listen(PORT, () => {

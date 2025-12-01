@@ -22,33 +22,64 @@ export default function VNPayReturn() {
         console.log('Payment verification result:', paymentResult);
 
         if (paymentResult.success) {
-          // ✅ Payment successful + Stock reserved
-          setStatus('success');
-          setMessage(paymentResult.message || 'Thanh toán thành công!');
-          toast.show('✅ Thanh toán thành công!', { type: 'success' });
+          // ✅ Payment successful - BUT check order status to ensure it wasn't cancelled due to stock
+          const orderId = paymentResult.data?.orderId || searchParams.get('vnp_TxnRef');
           
-          // Clear cart
-          try {
-            const { data: cartData } = await api.get('/cart/items');
-            for (const item of cartData.items || []) {
-              await api.delete(`/cart/items/${item.id}`).catch(() => {});
+          // Check order status to verify it wasn't cancelled
+          let orderStatus = null;
+          if (orderId) {
+            try {
+              const { data: orderData } = await api.get(`/orders/${orderId}`);
+              orderStatus = orderData?.status;
+              console.log(`Order #${orderId} status after payment:`, orderStatus);
+            } catch (orderErr) {
+              console.warn('Could not fetch order status:', orderErr);
+              // Continue with success if we can't check (non-critical)
             }
-          } catch (err) {
-            console.error('Clear cart error:', err);
           }
+          
+          // If order was cancelled (likely due to stock), treat as failure
+          if (orderStatus === 'CANCELLED') {
+            setStatus('failed');
+            setMessage('Thanh toán thành công nhưng sản phẩm đã hết hàng. Đơn hàng đã bị hủy và sẽ được hoàn tiền.');
+            toast.show('⚠️ Sản phẩm đã hết hàng! Đơn hàng bị hủy, vui lòng liên hệ để hoàn tiền.', { type: 'warning', duration: 8000 });
+            
+            // Redirect to cart after 10 seconds
+            setTimeout(() => {
+              navigate('/cart');
+            }, 10000);
+          } else {
+            // ✅ Payment successful + Order confirmed + Stock reserved
+            setStatus('success');
+            setMessage(paymentResult.message || 'Thanh toán thành công!');
+            toast.show('✅ Thanh toán thành công!', { type: 'success' });
+            
+            // Clear cart
+            try {
+              const { data: cartData } = await api.get('/cart/items');
+              for (const item of cartData.items || []) {
+                await api.delete(`/cart/items/${item.id}`).catch(() => {});
+              }
+            } catch (err) {
+              console.error('Clear cart error:', err);
+            }
 
-          // Redirect to orders page after 3 seconds
-          setTimeout(() => {
-            navigate('/orders');
-          }, 3000);
+            // Redirect to orders page after 3 seconds
+            setTimeout(() => {
+              navigate('/orders');
+            }, 3000);
+          }
         } else {
           // ❌ Payment failed or out of stock
           setStatus('failed');
           
-          // Kiểm tra nếu là lỗi hết hàng
-          if (paymentResult.code === '00' && paymentResult.message?.includes('hết hàng')) {
+          // Kiểm tra nếu là lỗi hết hàng (OUT_OF_STOCK)
+          if (paymentResult.code === 'OUT_OF_STOCK' && paymentResult.cancelled) {
+            setMessage(paymentResult.message || 'Sản phẩm đã hết hàng. Đơn hàng đã bị hủy và sẽ được hoàn tiền.');
+            toast.show('⚠️ Sản phẩm đã hết hàng! Đơn hàng bị hủy, vui lòng liên hệ để hoàn tiền.', { type: 'warning', duration: 8000 });
+          } else if (paymentResult.code === '00' && paymentResult.message?.includes('hết hàng')) {
             setMessage('Thanh toán thành công nhưng sản phẩm đã hết hàng. Đơn hàng đã bị hủy và sẽ được hoàn tiền.');
-            toast.show('⚠️ Sản phẩm đã hết hàng! Đơn hàng bị hủy, vui lòng liên hệ để hoàn tiền.', { type: 'warning' });
+            toast.show('⚠️ Sản phẩm đã hết hàng! Đơn hàng bị hủy, vui lòng liên hệ để hoàn tiền.', { type: 'warning', duration: 8000 });
           } else {
             const errorMessages = {
               '07': 'Giao dịch bị nghi ngờ (liên quan tới lừa đảo)',

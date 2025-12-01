@@ -52,14 +52,31 @@ export default function Home() {
     const discountPercent = Number(p.discount_percent || 0);
     const finalPrice = Math.round(originalPrice * (100 - discountPercent) / 100);
     
+    // ✅ Frontend validation: Chỉ check số lượng đang thêm, KHÔNG tính số lượng đã có trong giỏ
+    // Stock sẽ được check lại khi checkout và chỉ trừ khi thanh toán xong
+    const availableStock = p.stock || 0;
+    const quantityToAdd = 1;
+    
+    if (availableStock === 0) {
+      toast.show('Sản phẩm đã hết hàng', { type: 'error' });
+      return;
+    }
+    
+    // Chỉ check số lượng đang thêm có <= stock hiện tại không
+    if (quantityToAdd > availableStock) {
+      toast.show(`Không đủ hàng trong kho. Chỉ còn ${availableStock} sản phẩm`, { type: 'error' });
+      return;
+    }
+    
     // Đã đăng nhập: thêm vào giỏ hàng của user
     if (token) {
       try {
-        await addItemToCart(api, { productId: p.id, quantity: 1, priceCents: finalPrice })
+        await addItemToCart(api, { productId: p.id, quantity: quantityToAdd, priceCents: finalPrice })
         await refreshCart()
         toast.show(VI.products.addedToCart, { type: 'success' })
       } catch (e) {
-        toast.show(VI.errors.somethingWentWrong, { type: 'error' })
+        const errorMsg = e?.response?.data?.error || e?.message || VI.errors.somethingWentWrong;
+        toast.show(errorMsg, { type: 'error' })
       }
       return
     }
@@ -70,7 +87,7 @@ export default function Home() {
       const { guestCartId: newGuestCartId, items } = await addGuestItemToCart({
         guestCartId,
         productId: p.id,
-        quantity: 1,
+        quantity: quantityToAdd,
         priceCents: finalPrice
       })
       sessionStorage.setItem('guestCartId', newGuestCartId)
@@ -78,7 +95,8 @@ export default function Home() {
       await refreshCart() // Refresh cart count (sẽ load từ sessionStorage)
       toast.show('✓ Đã thêm vào giỏ hàng (khách)', { type: 'success' })
     } catch (e) {
-      toast.show(e.message || 'Lỗi khi thêm vào giỏ hàng khách', { type: 'error' })
+      const errorMsg = e?.response?.data?.error || e?.message || 'Lỗi khi thêm vào giỏ hàng khách';
+      toast.show(errorMsg, { type: 'error' })
     }
   }
 
@@ -88,13 +106,66 @@ export default function Home() {
     const discountPercent = Number(p.discount_percent || 0);
     const finalPrice = Math.round(originalPrice * (100 - discountPercent) / 100);
     
-    // Đã đăng nhập: thêm vào giỏ và chuyển sang trang giỏ hàng (hành vi cũ)
+    // ✅ Frontend validation: Check stock before buy now
+    const availableStock = p.stock || 0;
+    const quantityToBuy = 1;
+    
+    if (availableStock === 0) {
+      toast.show('Sản phẩm đã hết hàng', { type: 'error' });
+      return;
+    }
+    
+    // Check current cart quantity + quantity to buy
+    let currentQuantityInCart = 0;
     if (token) {
       try {
-        await addItemToCart(api, { productId: p.id, quantity: 1, priceCents: finalPrice })
-        navigate('/cart')
+        const cartData = await api.get('/cart').then(r => r.data);
+        const existingItem = cartData?.items?.find(item => item.product_id === p.id);
+        currentQuantityInCart = existingItem ? existingItem.quantity : 0;
       } catch (e) {
-        toast.show(VI.errors.somethingWentWrong, { type: 'error' })
+        // If cart fetch fails, continue (backend will validate)
+        console.warn('Could not fetch cart for validation:', e);
+      }
+    } else {
+      // Guest cart: check sessionStorage
+      const storedGuestCartItems = JSON.parse(sessionStorage.getItem('guestCartItems') || '[]');
+      const existingItem = storedGuestCartItems.find(item => (item.product_id || item.productId) === p.id);
+      currentQuantityInCart = existingItem ? (existingItem.quantity || 0) : 0;
+    }
+    
+    const requestedTotalQuantity = currentQuantityInCart + quantityToBuy;
+    if (requestedTotalQuantity > availableStock) {
+      toast.show(`Không đủ hàng trong kho. Chỉ còn ${availableStock} sản phẩm${currentQuantityInCart > 0 ? ` (bạn đã có ${currentQuantityInCart} trong giỏ)` : ''}`, { type: 'error' });
+      return;
+    }
+    
+    // ✅ Mua ngay: Chuyển thẳng đến checkout, không qua giỏ hàng
+    // Đã đăng nhập: Thêm vào giỏ tạm thời rồi chuyển đến checkout với selectedItems
+    if (token) {
+      try {
+        // Thêm vào giỏ để có item trong cart
+        await addItemToCart(api, { productId: p.id, quantity: quantityToBuy, priceCents: finalPrice })
+        await refreshCart()
+        
+        // Lấy cart mới để có item vừa thêm
+        const cartData = await api.get('/cart').then(r => r.data)
+        const addedItem = cartData?.items?.find(item => item.product_id === p.id)
+        
+        if (addedItem) {
+          // Chuyển đến checkout với item vừa thêm được chọn
+          navigate('/checkout', {
+            state: {
+              selectedItems: [addedItem],
+              selectedItemIds: [addedItem.id]
+            }
+          })
+        } else {
+          // Fallback: chuyển đến cart nếu không tìm thấy item
+          navigate('/cart')
+        }
+      } catch (e) {
+        const errorMsg = e?.response?.data?.error || e?.message || VI.errors.somethingWentWrong;
+        toast.show(errorMsg, { type: 'error' })
       }
       return
     }
@@ -105,7 +176,7 @@ export default function Home() {
         guestItems: [
           {
             productId: p.id,
-            quantity: 1,
+            quantity: quantityToBuy,
             priceCents: finalPrice
           }
         ]

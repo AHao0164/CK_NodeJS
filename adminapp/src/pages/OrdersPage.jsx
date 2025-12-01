@@ -26,8 +26,11 @@ import {
   Button,
   Snackbar,
   Alert,
+  Pagination,
+  TableContainer,
+  Tooltip,
 } from '@mui/material';
-import { Search, Visibility, Close, DeleteOutline, FileDownload } from '@mui/icons-material';
+import { Search, Visibility, Close, DeleteOutline, FileDownload, ArrowUpward, ArrowDownward } from '@mui/icons-material';
 import { useAuth } from '../state/AuthContext.jsx';
 import { exportToExcel, formatOrdersForExport } from '../utils/exportExcel';
 
@@ -40,24 +43,65 @@ export default function OrdersPage() {
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
   const [notification, setNotification] = useState({ open: false, message: '', severity: 'success' });
+  
+  // Pagination state
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(20);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [loading, setLoading] = useState(false);
 
   const load = async () => {
     try {
-      const params = {};
+      setLoading(true);
+      const params = {
+        page: page.toString(),
+        pageSize: pageSize.toString()
+      };
       if (statusFilter && statusFilter !== 'ALL') {
         params.status = statusFilter;
       }
+      if (search && search.trim()) {
+        params.search = search.trim();
+      }
       const { data } = await api.get('/admin/orders', { params });
-      setOrders(data || []);
+      
+      // Handle both old format (array) and new format (object with items and pagination)
+      if (Array.isArray(data)) {
+        setOrders(data);
+        setTotal(data.length);
+        setTotalPages(1);
+      } else {
+        setOrders(data?.items || []);
+        setTotal(data?.pagination?.total || 0);
+        setTotalPages(data?.pagination?.totalPages || 1);
+      }
     } catch (error) {
       console.error('Failed to load orders:', error);
       setOrders([]);
+      setTotal(0);
+      setTotalPages(0);
+    } finally {
+      setLoading(false);
     }
   };
 
   useEffect(() => {
     load();
-  }, [statusFilter]);
+  }, [statusFilter, page]);
+
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (page === 1) {
+        load();
+      } else {
+        setPage(1); // Reset to page 1 when search changes
+      }
+    }, 500); // 500ms debounce
+    
+    return () => clearTimeout(timer);
+  }, [search]);
 
   const updateStatus = async (id, status) => {
     try {
@@ -90,14 +134,14 @@ export default function OrdersPage() {
   };
 
   const deleteAllOrders = async () => {
-    if (filteredOrders.length === 0) return;
-    if (!window.confirm(`Bạn có chắc muốn xóa TẤT CẢ ${filteredOrders.length} đơn hàng?`)) return;
+    if (orders.length === 0) return;
+    if (!window.confirm(`Bạn có chắc muốn xóa TẤT CẢ ${orders.length} đơn hàng trên trang này?`)) return;
     
     try {
-      await Promise.all(filteredOrders.map(o => api.delete(`/admin/orders/${o.id}`)));
+      await Promise.all(orders.map(o => api.delete(`/admin/orders/${o.id}`)));
       setSelectedIds([]);
       await load();
-      showNotification(`Đã xóa tất cả ${filteredOrders.length} đơn hàng`, 'success');
+      showNotification(`Đã xóa tất cả ${orders.length} đơn hàng`, 'success');
     } catch (error) {
       console.error('Failed to delete all orders:', error);
       showNotification('Xóa tất cả đơn hàng thất bại', 'error');
@@ -110,7 +154,7 @@ export default function OrdersPage() {
 
   const handleSelectAll = (event) => {
     if (event.target.checked) {
-      setSelectedIds(filteredOrders.map(o => o.id));
+      setSelectedIds(orders.map(o => o.id));
     } else {
       setSelectedIds([]);
     }
@@ -199,20 +243,20 @@ export default function OrdersPage() {
     }
   };
 
-  const filteredOrders = orders.filter((o) => {
-    const matchesStatus = statusFilter === 'ALL' || o.status === statusFilter;
-    const matchesSearch =
-      !search || o.id.toString().includes(search) || o.user_id.toString().includes(search);
-    return matchesStatus && matchesSearch;
-  });
-
+  // Note: Filtering is now done on backend, but we keep this for status counts
+  // Status counts need to be fetched separately or calculated from all orders
   const statusCounts = {
-    ALL: orders.length,
+    ALL: total,
     PENDING: orders.filter((o) => o.status === 'PENDING').length,
     CONFIRMED: orders.filter((o) => o.status === 'CONFIRMED').length,
     SHIPPING: orders.filter((o) => o.status === 'SHIPPING').length,
     DELIVERED: orders.filter((o) => o.status === 'DELIVERED').length,
     CANCELLED: orders.filter((o) => o.status === 'CANCELLED').length,
+  };
+
+  const handlePageChange = (event, value) => {
+    setPage(value);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   return (
@@ -231,7 +275,7 @@ export default function OrdersPage() {
             variant="contained"
             color="success"
             startIcon={<FileDownload />}
-            onClick={() => exportToExcel(formatOrdersForExport(filteredOrders), 'DonHang', 'Đơn hàng')}
+            onClick={() => exportToExcel(formatOrdersForExport(orders), 'DonHang', 'Đơn hàng')}
             sx={{ 
               borderRadius: 2,
               fontSize: { xs: '0.875rem', sm: '1rem' },
@@ -255,7 +299,7 @@ export default function OrdersPage() {
               Xóa đã chọn ({selectedIds.length})
             </Button>
           )}
-          {filteredOrders.length > 0 && (
+          {orders.length > 0 && (
             <Button
               variant="outlined"
               color="error"
@@ -304,104 +348,205 @@ export default function OrdersPage() {
         </Box>
       </Paper>
 
-      <Paper sx={{ borderRadius: 2, boxShadow: '0 1px 3px rgba(0,0,0,0.05)', overflowX: 'auto' }}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell padding="checkbox">
-                <Checkbox
-                  checked={filteredOrders.length > 0 && selectedIds.length === filteredOrders.length}
-                  indeterminate={selectedIds.length > 0 && selectedIds.length < filteredOrders.length}
-                  onChange={handleSelectAll}
-                />
-              </TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>STT</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>Mã đơn</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>Khách hàng</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>Phương thức</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>Ngày đặt</TableCell>
-              <TableCell sx={{ fontWeight: 600 }} align="right">
-                Tổng tiền
-              </TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>Trạng thái</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>Cập nhật</TableCell>
-              <TableCell sx={{ fontWeight: 600 }} align="center">
-                Thao tác
-              </TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {filteredOrders.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={10} align="center">
-                  <Typography color="text.secondary" variant="body2" sx={{ py: 4 }}>
-                    Không tìm thấy đơn hàng nào
-                  </Typography>
+      <Paper sx={{ borderRadius: 2, boxShadow: '0 2px 8px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
+        <TableContainer>
+          <Table>
+            <TableHead>
+              <TableRow sx={{ bgcolor: 'primary.main' }}>
+                <TableCell padding="checkbox" sx={{ color: 'white', fontWeight: 600 }}>
+                  <Checkbox
+                    checked={orders.length > 0 && selectedIds.length === orders.length}
+                    indeterminate={selectedIds.length > 0 && selectedIds.length < orders.length}
+                    onChange={handleSelectAll}
+                    sx={{ color: 'white', '&.Mui-checked': { color: 'white' } }}
+                  />
+                </TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 600 }}>STT</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 600 }}>Mã đơn</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 600 }}>Khách hàng</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 600 }}>Phương thức</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 600 }}>
+                  <Stack direction="row" alignItems="center" spacing={0.5}>
+                    <span>Ngày đặt</span>
+                  </Stack>
+                </TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 600 }} align="right">
+                  Tổng tiền
+                </TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 600 }}>Trạng thái</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 600 }}>Cập nhật</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 600 }} align="center">
+                  Thao tác
                 </TableCell>
               </TableRow>
-            ) : (
-              filteredOrders.map((o, index) => (
-                <TableRow 
-                  key={o.id} 
-                  hover
-                  selected={selectedIds.includes(o.id)}
-                  sx={{ '&.Mui-selected': { bgcolor: 'action.hover' } }}
-                >
-                  <TableCell padding="checkbox">
-                    <Checkbox
-                      checked={selectedIds.includes(o.id)}
-                      onChange={() => handleSelectOne(o.id)}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                      {index + 1}
+            </TableHead>
+            <TableBody>
+              {loading ? (
+                <TableRow>
+                  <TableCell colSpan={10} align="center">
+                    <Typography color="text.secondary" variant="body2" sx={{ py: 4 }}>
+                      Đang tải...
                     </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                      #{o.id}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>User #{o.user_id}</TableCell>
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontSize: '0.875rem' }}>
-                      {getPaymentMethodLabel(o.payment_method)}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>{formatDate(o.created_at)}</TableCell>
-                  <TableCell align="right">
-                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                      {formatCurrency(o.total_cents)}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Chip label={getStatusLabel(o.status)} color={getStatusColor(o.status)} size="small" />
-                  </TableCell>
-                  <TableCell>
-                    <Select
-                      size="small"
-                      value={o.status}
-                      onChange={(e) => updateStatus(o.id, e.target.value)}
-                      sx={{ minWidth: 150 }}
-                    >
-                      <MenuItem value="PENDING">Chờ xác nhận</MenuItem>
-                      <MenuItem value="CONFIRMED">Đã xác nhận</MenuItem>
-                      <MenuItem value="SHIPPING">Đang giao hàng</MenuItem>
-                      <MenuItem value="DELIVERED">Đã giao hàng</MenuItem>
-                      <MenuItem value="CANCELLED">Đã hủy</MenuItem>
-                    </Select>
-                  </TableCell>
-                  <TableCell align="center">
-                    <IconButton size="small" onClick={() => viewOrderDetail(o)}>
-                      <Visibility fontSize="small" />
-                    </IconButton>
                   </TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+              ) : orders.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={10} align="center">
+                    <Typography color="text.secondary" variant="body2" sx={{ py: 4 }}>
+                      Không tìm thấy đơn hàng nào
+                    </Typography>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                orders.map((o, index) => {
+                  const rowNumber = (page - 1) * pageSize + index + 1;
+                  const isNewOrder = new Date(o.created_at) > new Date(Date.now() - 24 * 60 * 60 * 1000); // Within 24 hours
+                  
+                  return (
+                    <TableRow 
+                      key={o.id} 
+                      hover
+                      selected={selectedIds.includes(o.id)}
+                      sx={{ 
+                        '&.Mui-selected': { bgcolor: 'action.selected' },
+                        bgcolor: isNewOrder ? 'action.hover' : 'transparent',
+                        borderLeft: isNewOrder ? '3px solid' : 'none',
+                        borderLeftColor: isNewOrder ? 'success.main' : 'transparent',
+                        '&:hover': { bgcolor: 'action.hover' }
+                      }}
+                    >
+                      <TableCell padding="checkbox">
+                        <Checkbox
+                          checked={selectedIds.includes(o.id)}
+                          onChange={() => handleSelectOne(o.id)}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary' }}>
+                          {rowNumber}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" sx={{ fontWeight: 700, color: 'primary.main' }}>
+                          #{o.id}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" sx={{ color: 'text.primary' }}>
+                          User #{o.user_id}
+                        </Typography>
+                        {o.shipping_name && (
+                          <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+                            {o.shipping_name}
+                          </Typography>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Chip 
+                          label={getPaymentMethodLabel(o.payment_method)} 
+                          size="small" 
+                          variant="outlined"
+                          sx={{ 
+                            fontSize: '0.75rem',
+                            borderColor: o.payment_method === 'VNPAY' ? 'info.main' : 'default.main'
+                          }}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" sx={{ color: 'text.primary', fontWeight: 500 }}>
+                          {formatDate(o.created_at)}
+                        </Typography>
+                        {isNewOrder && (
+                          <Chip 
+                            label="Mới" 
+                            size="small" 
+                            color="success"
+                            sx={{ mt: 0.5, fontSize: '0.65rem', height: '18px' }}
+                          />
+                        )}
+                      </TableCell>
+                      <TableCell align="right">
+                        <Typography variant="body2" sx={{ fontWeight: 700, color: 'success.main', fontSize: '0.95rem' }}>
+                          {formatCurrency(o.total_cents)}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Chip 
+                          label={getStatusLabel(o.status)} 
+                          color={getStatusColor(o.status)} 
+                          size="small"
+                          sx={{ 
+                            fontWeight: 600,
+                            minWidth: '100px'
+                          }}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Select
+                          size="small"
+                          value={o.status}
+                          onChange={(e) => updateStatus(o.id, e.target.value)}
+                          sx={{ 
+                            minWidth: 150,
+                            '& .MuiSelect-select': {
+                              py: 1
+                            }
+                          }}
+                        >
+                          <MenuItem value="PENDING">Chờ xác nhận</MenuItem>
+                          <MenuItem value="CONFIRMED">Đã xác nhận</MenuItem>
+                          <MenuItem value="SHIPPING">Đang giao hàng</MenuItem>
+                          <MenuItem value="DELIVERED">Đã giao hàng</MenuItem>
+                          <MenuItem value="CANCELLED">Đã hủy</MenuItem>
+                        </Select>
+                      </TableCell>
+                      <TableCell align="center">
+                        <Tooltip title="Xem chi tiết">
+                          <IconButton 
+                            size="small" 
+                            onClick={() => viewOrderDetail(o)}
+                            sx={{ 
+                              color: 'primary.main',
+                              '&:hover': { bgcolor: 'primary.light', color: 'white' }
+                            }}
+                          >
+                            <Visibility fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+        
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', py: 3, borderTop: 1, borderColor: 'divider' }}>
+            <Stack direction="row" spacing={2} alignItems="center">
+              <Typography variant="body2" color="text.secondary">
+                Trang {page} / {totalPages} ({total} đơn hàng)
+              </Typography>
+              <Pagination
+                count={totalPages}
+                page={page}
+                onChange={handlePageChange}
+                color="primary"
+                size="large"
+                showFirstButton
+                showLastButton
+                sx={{
+                  '& .MuiPaginationItem-root': {
+                    fontSize: '0.95rem',
+                    fontWeight: 500
+                  }
+                }}
+              />
+            </Stack>
+          </Box>
+        )}
       </Paper>
 
       {/* Order Detail Dialog */}

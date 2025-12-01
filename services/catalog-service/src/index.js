@@ -10,6 +10,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { Client } from '@elastic/elasticsearch';
 import RedisLockManager from '../shared/RedisLockManager.js';
+import { setupOrderEventHandlers } from './eventHandlers.js';
 import { chatWithAI, generateProductRecommendations } from './ai/chatbot.js';
 import { searchProductsByImageBuffer } from './ai/image-search.js';
 import { analyzeReviewSentiment, getSentimentStatistics } from './ai/sentiment-analysis.js';
@@ -421,6 +422,32 @@ async function searchProductsWithES(params) {
     }
     
     parseProductsArray(filteredRows);
+
+    // Fetch images for all products in batch
+    let productImagesMap = {};
+    if (productIds.length > 0) {
+      const imagePlaceholders = productIds.map(() => '?').join(',');
+      const [imageRows] = await pool.query(
+        `SELECT product_id, url, sort_order 
+         FROM product_images 
+         WHERE product_id IN (${imagePlaceholders}) 
+         ORDER BY product_id, sort_order`,
+        productIds
+      );
+      
+      // Group images by product_id
+      imageRows.forEach(img => {
+        if (!productImagesMap[img.product_id]) {
+          productImagesMap[img.product_id] = [];
+        }
+        productImagesMap[img.product_id].push({ url: img.url, sort_order: img.sort_order });
+      });
+    }
+
+    // Attach images array to each product
+    filteredRows.forEach(product => {
+      product.images = productImagesMap[product.id] || [];
+    });
     
     return { items: filteredRows, total };
   } catch (error) {
@@ -645,6 +672,33 @@ app.get('/catalog/products', async (req, res) => {
 
     // Parse JSON fields for all products
     parseProductsArray(rows);
+
+    // Fetch images for all products in batch (more efficient than per-product queries)
+    const productIds = rows.map(r => r.id);
+    let productImagesMap = {};
+    if (productIds.length > 0) {
+      const placeholders = productIds.map(() => '?').join(',');
+      const [imageRows] = await pool.query(
+        `SELECT product_id, url, sort_order 
+         FROM product_images 
+         WHERE product_id IN (${placeholders}) 
+         ORDER BY product_id, sort_order`,
+        productIds
+      );
+      
+      // Group images by product_id
+      imageRows.forEach(img => {
+        if (!productImagesMap[img.product_id]) {
+          productImagesMap[img.product_id] = [];
+        }
+        productImagesMap[img.product_id].push({ url: img.url, sort_order: img.sort_order });
+      });
+    }
+
+    // Attach images array to each product
+    rows.forEach(product => {
+      product.images = productImagesMap[product.id] || [];
+    });
 
     return res.json({ items: rows, page, pageSize, total });
   } catch (error) {
@@ -1148,6 +1202,39 @@ app.post('/catalog/guest-cart', async (req, res) => {
   try {
     await conn.beginTransaction();
 
+    // ✅ Validate stock availability BEFORE adding to cart
+    const [[product]] = await conn.query(
+      `SELECT p.id, i.stock 
+       FROM products p
+       LEFT JOIN inventory i ON i.product_id = p.id
+       WHERE p.id = ?`,
+      [productId]
+    );
+    
+    if (!product) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Sản phẩm không tồn tại' });
+    }
+    
+    const availableStock = product.stock || 0;
+    
+    // ⚠️ CHỈ CHECK số lượng đang thêm, KHÔNG tính số lượng đã có trong giỏ
+    // Stock sẽ được check lại khi checkout và chỉ trừ khi thanh toán xong
+    if (availableStock === 0) {
+      await conn.rollback();
+      return res.status(400).json({ 
+        error: 'Sản phẩm đã hết hàng' 
+      });
+    }
+    
+    // Chỉ check số lượng đang thêm có <= stock hiện tại không
+    if (quantity > availableStock) {
+      await conn.rollback();
+      return res.status(400).json({ 
+        error: `Không đủ hàng trong kho. Chỉ còn ${availableStock} sản phẩm` 
+      });
+    }
+
     // Ensure guest cart exists or create it
     await conn.query(
       'INSERT IGNORE INTO guest_carts (id, created_at) VALUES (?, NOW())',
@@ -1172,6 +1259,9 @@ app.post('/catalog/guest-cart', async (req, res) => {
   } catch (e) {
     await conn.rollback();
     console.error('Error adding to guest cart:', e);
+    if (e.response) {
+      return res.status(e.response.status).json({ error: e.response.data?.error || 'Catalog service error' });
+    }
     return res.status(500).json({ error: 'Server error' });
   } finally {
     conn.release();
@@ -2777,12 +2867,17 @@ app.post('/admin/catalog/sync-elasticsearch', async (req, res) => {
   }
 });
 
-// Connect to Redis on startup
-lockManager.connect().then(() => {
+// Connect to Redis on startup and setup event handlers
+Promise.all([
+  lockManager.connect(),
+  setupOrderEventHandlers(pool).then(() => {
+    console.log('✅ Catalog service event handlers ready');
+  })
+]).then(() => {
   console.log('✅ Catalog service Redis lock manager ready');
 }).catch(err => {
   console.error('❌ Redis connection failed:', err);
-  console.warn('⚠️ Service will run WITHOUT distributed locks');
+  console.warn('⚠️ Service will run WITHOUT distributed locks and event handlers');
 });
 
 // Initialize ElasticSearch on startup

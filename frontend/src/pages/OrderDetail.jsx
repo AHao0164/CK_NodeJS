@@ -104,8 +104,8 @@ export default function OrderDetail() {
             </div>
           </div>
           
-          {/* Cancel button - only show for PENDING status */}
-          {order.status === 'PENDING' && (
+          {/* Cancel button - show for PENDING or CONFIRMED status */}
+          {(order.status === 'PENDING' || order.status === 'CONFIRMED') && (
             <div className="mt-4 pt-4 border-t border-slate-200">
               <button
                 onClick={handleCancelOrder}
@@ -114,7 +114,9 @@ export default function OrderDetail() {
               >
                 {cancelling ? 'Đang hủy...' : '✕ Hủy đơn hàng'}
               </button>
-              <p className="text-xs text-slate-500 mt-2">* Chỉ có thể hủy khi đơn hàng đang chờ xác nhận</p>
+              <p className="text-xs text-slate-500 mt-2">
+                * Chỉ có thể hủy khi đơn hàng đang chờ xác nhận hoặc đã xác nhận (chưa ship)
+              </p>
             </div>
           )}
         </CardBody>
