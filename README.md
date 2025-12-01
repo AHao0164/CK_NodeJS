@@ -46,10 +46,6 @@ node tools/seed/seed.js
         'testuser4@example.com' / '123456'
         'testuser5@example.com' / '123456'
         'testuser6@example.com' / '123456'
-  await signupUser('testuser5@example.com', '123456', 'Test User 5');
-  await signupUser('testuser6@example.com', '123456', 'Test User 6');
-        
-
 ---
 
 ## 🎯 Giới Thiệu
