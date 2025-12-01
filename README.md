@@ -28,9 +28,7 @@ docker-compose up -d --build
 # Kiểm tra trạng thái: docker-compose ps
 
 # 4. Seed dữ liệu mẫu
-cd tools/seed
-npm install
-node seed.js
+node tools/seed/seed.js
 
 # 5. Truy cập ứng dụng
 # - Customer: http://localhost:5173
