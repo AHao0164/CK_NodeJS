@@ -10,7 +10,7 @@
 7. [Use Cases](#use-cases)
 8. [Tính Năng](#tính-năng)
 9. [Distributed Lock System](#distributed-lock-system)
-10. [Testing API](#testing-api)
+10. [Testing](#testing)
 
 ---
 
@@ -18,25 +18,34 @@
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/huynhdai5656/Laptop.git
-cd Laptop
+git clone https://github.com/AHao0164/CK_NodeJS.git
+cd CK_NodeJS
 
 # 2. Khởi chạy Docker
 docker-compose up -d --build
 
-# 3. Đợi 30 giây, sau đó seed data
-cd tools/seed && npm install && node seed.js
+# 3. Đợi services khởi động (khoảng 1-2 phút)
+# Kiểm tra trạng thái: docker-compose ps
 
-# 4. Truy cập ứng dụng
+# 4. Seed dữ liệu mẫu
+node tools/seed/seed.js
+
+# 5. Truy cập ứng dụng
 # - Customer: http://localhost:5173
 # - Admin: http://localhost:5174
-# - API: http://localhost:8080
+# - API Gateway: http://localhost:8080
+# - phpMyAdmin: http://localhost:8081
 ```
 
 **Tài khoản mặc định:**
 - Admin: `tenho051512@gmail.com` / `admin123456`
 - User: `user1@example.com` / `123456`
-
+        `tendemten051512@gmail.com` / '123456'
+        `hoten051512@gmail.com` / '123456`
+        `testuser3@example.com` / '123456`
+        `testuser4@example.com` / '123456`
+        `testuser5@example.com` / '123456`
+        `testuser6@example.com` / '123456`
 ---
 
 ## 🎯 Giới Thiệu
@@ -48,28 +57,36 @@ cd tools/seed && npm install && node seed.js
 **Backend:**
 - Node.js 20 + Express.js
 - MySQL 8.0 (5 logical databases)
-- Redis 7 (Distributed locks)
+- Redis 7 (Distributed locks + caching)
+- Elasticsearch 8.11 (Full-text search)
 - JWT Authentication
+- Passport.js (OAuth2 - Google & Facebook)
+- Nodemailer (Email service)
 - Axios (Inter-service communication)
 
 **Frontend:**
 - React 18 + Vite
 - Tailwind CSS 3
 - React Router v6
-- Context API
+- Context API (State management)
+- Axios (HTTP client)
 
 **DevOps:**
 - Docker & Docker Compose
 - Multi-stage builds
 - Health checks
 - Volume persistence
+- phpMyAdmin (Database management)
 
 ### Điểm Nổi Bật
-✅ **Microservices Architecture** - 5 services độc lập  
+✅ **Microservices Architecture** - 5 services độc lập, scalable  
 ✅ **Distributed Lock System** - Redis-based, ngăn race conditions  
-✅ **VNPAY Integration** - Thanh toán online sandbox  
+✅ **VNPAY Integration** - Thanh toán online + QR Code banking  
+✅ **OAuth2 Authentication** - Google & Facebook login  
+✅ **Elasticsearch Integration** - Full-text search sản phẩm  
+✅ **AI Chatbot** - Google Gemini API integration  
+✅ **Email Service** - OTP verification, forgot password  
 ✅ **Circuit Breaker Pattern** - Graceful degradation  
-✅ **Real-time Cart Sync** - WebSocket-like updates  
 ✅ **Review System** - Đánh giá với phản hồi shop  
 ✅ **Coupon System** - Mã giảm giá thông minh  
 ✅ **Responsive UI** - Dark mode, mobile-friendly  
@@ -81,239 +98,390 @@ cd tools/seed && npm install && node seed.js
 ### Tổng +
 
 ```
-┌────────────────────────────────────────────────┐
-│            FRONTEND LAYER                      │
-├─────────────────────┬──────────────────────────┤
-│  Customer Web       │  Admin Dashboard         │
-│  (React)            │  (React)                 │
-│  :5173              │  :5174                   │
-└──────────┬──────────┴────────┬─────────────────┘
-           │                   │
-           └────────┬──────────┘
-                    │
-                    ▼
-┌────────────────────────────────────────────────┐
-│           API GATEWAY (:8080)                  │
-│  - Routing                                     │
-│  - Authentication                              │
-│  - Circuit Breaker                             │
-└──┬────┬────┬────┬────┬──────────────────────┘
-   │    │    │    │    │
-   ▼    ▼    ▼    ▼    ▼
-┌────┐┌────┐┌────┐┌────┐┌─────┐
-│Auth││Cata││Cart││Orde││Payme│
-│:300││log ││:300││r   ││nt   │
-│1   ││:300││3   ││:300││:3005│
-│    ││2   ││    ││4   ││     │
-└─┬──┘└─┬──┘└─┬──┘└─┬──┘└──┬──┘
-  │     │     │     │      │
-  └─────┴─────┴─────┴──────┘
-              │
-    ┌─────────┼─────────┐
-    ▼         ▼         ▼
-┌────────┐┌────────┐┌──────┐
-│ MySQL  ││ Redis  ││VNPAY │
-│ :3306  ││ :6379  ││Extern│
-└────────┘└────────┘└──────┘
+┌──────────────────────────────────────────────────────────────┐
+│                    FRONTEND LAYER                            │
+├───────────────────────────────┬──────────────────────────────┤
+│     Customer Web App          │    Admin Dashboard           │
+│     (React + Vite)            │    (React + Vite)            │
+│     Port: 5173                │    Port: 5174                │
+└───────────────┬───────────────┴──────────────┬───────────────┘
+                │                              │
+                └──────────────┬───────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────┐
+│                   API GATEWAY (Port 8080)                    │
+│  ✓ JWT Authentication     ✓ Rate Limiting                   │
+│  ✓ Request Routing        ✓ CORS                            │
+│  ✓ Circuit Breaker        ✓ Multipart Upload                │
+└───┬──────┬──────┬──────┬──────┬───────────────────────────┘
+    │      │      │      │      │
+    ▼      ▼      ▼      ▼      ▼
+┌────────┐┌────────┐┌────────┐┌────────┐┌────────┐
+│  Auth  ││Catalog ││  Cart  ││ Order  ││Payment │
+│Service ││Service ││Service ││Service ││Service │
+│ :3001  ││ :3002  ││ :3003  ││ :3004  ││ :3005  │
+│        ││        ││        ││        ││        │
+│OAuth2  ││Elastic ││Redis   ││Redis   ││VNPAY   │
+│Email   ││AI Chat ││Lock    ││Lock    ││QR Code │
+└───┬────┘└───┬────┘└───┬────┘└───┬────┘└───┬────┘
+    │         │         │         │         │
+    └─────────┴─────────┴─────────┴─────────┘
+                        │
+        ┌───────────────┼───────────────┬──────────────┐
+        │               │               │              │
+        ▼               ▼               ▼              ▼
+┌──────────────┐┌──────────────┐┌─────────────┐┌──────────┐
+│    MySQL     ││    Redis     ││Elasticsearch││ phpMyAdmin│
+│   (8.0)      ││   (7.x)      ││   (8.11)    ││          │
+│   :3306      ││   :6379      ││   :9200     ││  :8081   │
+│              ││              ││             ││          │
+│ 5 Databases: ││ • Locks      ││ • Products  ││ DB Admin │
+│ - auth_db    ││ • Cache      ││   Index     ││ Interface│
+│ - catalog_db ││ • Sessions   ││ • Full-text ││          │
+│ - cart_db    ││ • Rate Limit ││   Search    ││          │
+│ - order_db   ││              ││             ││          │
+│ - payment_db ││              ││             ││          │
+└──────────────┘└──────────────┘└─────────────┘└──────────┘
+
+External Services:
+├─ VNPAY Sandbox (Payment Gateway)
+├─ Google OAuth2 (Authentication)
+├─ Facebook OAuth2 (Authentication)
+├─ Google Gemini API (AI Chatbot)
+└─ SMTP Gmail (Email Service)
 ```
 
 ### Chi Tiết Services
 
 #### 1️⃣ Auth Service (Port 3001)
-**Chức năng:** Xác thực người dùng, quản lý JWT token
+**Chức năng:** Xác thực người dùng, quản lý JWT token, OAuth2
 
-**Database:** `auth_service_db`
-- Table: `users` (id, email, password_hash, full_name, role, phone, address)
+**Database:** `auth_db`
+- Table: `users` (id, email, password_hash, full_name, role, phone, address, provider, provider_id)
 
 **API Endpoints:**
 ```
-POST   /auth/signup      - Đăng ký tài khoản
-POST   /auth/login       - Đăng nhập (trả JWT)
-GET    /auth/me          - Thông tin user hiện tại
-PATCH  /auth/profile     - Cập nhật profile
-GET    /health           - Health check
+POST   /auth/signup              - Đăng ký tài khoản
+POST   /auth/login               - Đăng nhập (trả JWT)
+GET    /auth/me                  - Thông tin user hiện tại
+PATCH  /auth/profile             - Cập nhật profile
+POST   /auth/forgot-password     - Quên mật khẩu (gửi OTP)
+POST   /auth/verify-otp          - Xác thực OTP
+POST   /auth/reset-password      - Đặt lại mật khẩu
+GET    /auth/google              - Google OAuth login
+GET    /auth/google/callback     - Google OAuth callback
+GET    /auth/facebook            - Facebook OAuth login
+GET    /auth/facebook/callback   - Facebook OAuth callback
+GET    /health                   - Health check
 ```
 
 **Features:**
 - JWT token (expiry: 7 ngày)
-- Password hashing (bcrypt, salt rounds: 10)
-- Rate limiting: 5 attempts / 5 phút
-- Role: USER, ADMIN
-- Google OAuth login
-- Facebook OAuth login
-- Forgot password (OTP-based và token-based)
-- Email verification với OTP
+- Password hashing (bcryptjs, salt rounds: 10)
+- Rate limiting: 5 attempts / 5 phút (Redis-based)
+- Role-based access: USER, ADMIN
+- Google OAuth2 (Passport.js)
+- Facebook OAuth2 (Passport.js)
+- Forgot password với OTP email (Nodemailer)
+- Email verification
+- Auto-create admin account on startup
 
 #### 2️⃣ Catalog Service (Port 3002)
-**Chức năng:** Quản lý sản phẩm, categories, brands, inventory, reviews
+**Chức năng:** Quản lý sản phẩm, categories, brands, inventory, reviews, AI chatbot
 
-**Database:** `catalog_service_db`
-- Tables: `products`, `brands`, `categories`, `reviews`, `banners`
+**Database:** `catalog_db`
+- Tables: `products`, `brands`, `categories`, `reviews`, `banners`, `promotions`
 
 **API Endpoints:**
 ```
-GET    /catalog/products           - Danh sách sản phẩm
-GET    /catalog/products/:id       - Chi tiết sản phẩm
-GET    /catalog/brands             - Danh sách brands
-GET    /catalog/categories         - Danh sách categories
-POST   /catalog/products/:id/reviews - Đánh giá
+GET    /catalog/products              - Danh sách sản phẩm (pagination, filter, sort)
+GET    /catalog/products/:id          - Chi tiết sản phẩm
+GET    /catalog/products/search       - Tìm kiếm (Elasticsearch)
+GET    /catalog/brands                - Danh sách brands
+GET    /catalog/categories            - Danh sách categories
+GET    /catalog/banners               - Hero banners
+GET    /catalog/promotions            - Khuyến mãi đang active
+POST   /catalog/products/:id/reviews  - Tạo review
+GET    /catalog/reviews/:productId    - Reviews của sản phẩm
+POST   /catalog/chatbot               - AI chatbot (Gemini API)
 
 Admin:
-POST   /admin/catalog/products     - Tạo sản phẩm
-PUT    /admin/catalog/products/:id - Sửa sản phẩm
-DELETE /admin/catalog/products/:id - Xóa sản phẩm
-PATCH  /admin/catalog/inventory/:id - Cập nhật tồn kho
+POST   /admin/catalog/products        - Tạo sản phẩm (multipart upload)
+PUT    /admin/catalog/products/:id    - Sửa sản phẩm
+DELETE /admin/catalog/products/:id    - Xóa sản phẩm
+POST   /admin/catalog/inventory/reserve - Reserve inventory (với lock)
+PATCH  /admin/catalog/reviews/:id/reply - Reply review
+GET    /admin/catalog/reviews         - Quản lý reviews
 ```
 
 **Features:**
-- Full-text search (JSON_SEARCH trong specs)
-- Multi-image upload
-- Inventory locking (Redis)
+- Elasticsearch full-text search (product name, specs, description)
+- Multi-image upload (multer)
+- Inventory locking (Redis distributed lock)
 - Review system với shop reply
-- Circuit breaker
+- AI Chatbot (Google Gemini API)
+- WebSocket cho real-time updates
+- Circuit breaker pattern
+- Image storage trong volume
 
 #### 3️⃣ Cart Service (Port 3003)
 **Chức năng:** Quản lý giỏ hàng người dùng
 
-**Database:** `cart_service_db`
+**Database:** `cart_db`
 - Tables: `carts`, `cart_items`
 
 **API Endpoints:**
 ```
-GET    /cart              - Lấy giỏ hàng
-POST   /cart/items        - Thêm item
-PATCH  /cart/items/:id    - Cập nhật số lượng
-DELETE /cart/items/:id    - Xóa item
-DELETE /cart              - Xóa toàn bộ
+GET    /cart/:userId           - Lấy giỏ hàng của user
+POST   /cart/:userId/items     - Thêm item vào giỏ
+PUT    /cart/:userId/items/:id - Cập nhật số lượng
+DELETE /cart/:userId/items/:id - Xóa item
+DELETE /cart/:userId           - Xóa toàn bộ giỏ hàng
+GET    /health                 - Health check
 ```
 
 **Features:**
-- Real-time sync
-- Distributed lock khi update
-- Auto-remove nếu product out of stock
-- Cart expiration (30 ngày)
+- Cart update lock (Redis) - ngăn race condition
+- Auto-sync cart items với product info
+- Validate stock availability
+- Calculate cart total
+- Cart persistence (lưu trong DB)
+- Session-based cart management
 
 #### 4️⃣ Order Service (Port 3004)
-**Chức năng:** Xử lý đơn hàng, checkout, coupons
+**Chức năng:** Xử lý đơn hàng, checkout, coupons, order tracking
 
-**Database:** `order_service_db`
-- Tables: `orders`, `order_items`, `coupons`, `promotions`
+**Database:** `order_db`
+- Tables: `orders`, `order_items`, `coupons`, `coupon_usage`
 
 **API Endpoints:**
 ```
-POST   /orders/checkout         - Tạo đơn hàng
-GET    /orders                  - Lịch sử đơn
-GET    /orders/:id              - Chi tiết đơn
-POST   /orders/:id/cancel       - Hủy đơn
-POST   /coupons/validate        - Validate coupon
+POST   /orders/checkout              - Tạo đơn hàng (với lock)
+GET    /orders/user/:userId          - Lịch sử đơn hàng
+GET    /orders/:id                   - Chi tiết đơn hàng
+POST   /orders/:id/cancel            - Hủy đơn hàng
+POST   /orders/validate-coupon       - Validate mã giảm giá
+POST   /orders/apply-coupon          - Áp dụng coupon (với lock)
+GET    /health                       - Health check
 
 Admin:
-GET    /admin/orders            - Quản lý đơn
-PATCH  /admin/orders/:id/status - Cập nhật status
+GET    /admin/orders                 - Danh sách đơn hàng
+GET    /admin/orders/:id             - Chi tiết đơn
+PATCH  /admin/orders/:id/status      - Cập nhật trạng thái
+POST   /admin/coupons                - Tạo coupon
+GET    /admin/coupons                - Danh sách coupons
+DELETE /admin/coupons/:id            - Xóa coupon
 ```
 
 **Features:**
-- Order creation lock
-- Coupon usage lock
-- Order workflow: CONFIRMED → PROCESSING → SHIPPED → DELIVERED
-- Integration với Payment Service
+- Order creation lock (Redis) - ngăn duplicate orders
+- Coupon usage lock - đảm bảo max_usage chính xác
+- Order workflow: PENDING → CONFIRMED → PROCESSING → SHIPPED → DELIVERED → CANCELLED
+- Integration với Payment Service, Catalog Service
+- Inventory reservation trước khi checkout
+- Transaction rollback nếu payment failed
+- Coupon validation (min order value, valid date, usage limit)
+- Order statistics cho admin dashboard
 
 #### 5️⃣ Payment Service (Port 3005)
-**Chức năng:** Xử lý thanh toán VNPAY, COD
+**Chức năng:** Xử lý thanh toán VNPAY, QR Banking, COD
 
-**Database:** `payment_service_db`
-- Table: `payments`
+**Database:** Không có (stateless) - Gửi thông tin về Order Service
 
 **API Endpoints:**
 ```
-POST   /payment/create-url          - Tạo VNPAY URL
-GET    /payment/vnpay-return        - VNPAY callback
-POST   /payment/intents             - Tạo intent (mock COD)
-POST   /payment/intents/:id/confirm - Confirm payment
+POST   /payment/create-vnpay-url     - Tạo VNPAY payment URL
+GET    /payment/vnpay-return         - VNPAY return callback
+POST   /payment/vnpay-ipn            - VNPAY IPN webhook (với lock)
+POST   /payment/create-qr            - Tạo QR code ngân hàng
+POST   /payment/verify-qr            - Verify QR payment
+POST   /payment/cod/confirm          - Xác nhận COD
+GET    /health                       - Health check
 ```
 
 **Features:**
 - VNPAY Sandbox integration
-- Webhook idempotency lock
-- Signature verification
-- Fallback to COD
+  - Signature verification (HMAC SHA512)
+  - Return URL handling
+  - IPN webhook với idempotency lock
+- QR Code Banking
+  - VietQR format
+  - Auto-generate content với order ID
+  - Bank account info từ env
+- Payment webhook lock (Redis) - ngăn duplicate IPN processing
+- COD confirmation
+- Payment status tracking
+- Graceful error handling
 
 #### 6️⃣ API Gateway (Port 8080)
-**Chức năng:** Reverse proxy, authentication, routing
+**Chức năng:** Reverse proxy, authentication, routing, rate limiting
+
+**Routes:**
+```
+/auth/*           → Auth Service (3001)
+/catalog/*        → Catalog Service (3002)
+/cart/*           → Cart Service (3003)
+/orders/*         → Order Service (3004)
+/payment/*        → Payment Service (3005)
+/admin/*          → All services (với JWT admin check)
+/health           → Health check aggregation
+```
 
 **Features:**
-- JWT verification
-- Timeout: 30s (gateway), 8s (inter-service)
+- JWT verification middleware
+- Role-based access control (USER, ADMIN)
+- Request timeout: 30s (gateway), 10s (inter-service)
 - Circuit breaker cho all services
-- Error messages tiếng Việt
-- Health check aggregation
+  - Failure threshold: 50%
+  - Timeout: 10s
+  - Reset timeout: 30s
+- CORS configuration
+- Multipart/form-data handling (image upload)
+- Error messages chuẩn hóa
+- Request logging (morgan)
+- Health check aggregation từ tất cả services
 
 ---
 
 ## 📁 Cấu Trúc Dự Án
 
 ```
-Gear/
+CK_NodeJS/
 ├── services/
 │   ├── auth-service/
 │   │   ├── src/
-│   │   │   ├── index.js
-│   │   │   ├── routes/
+│   │   │   ├── index.js              # Main server
+│   │   │   ├── config/
+│   │   │   │   └── passport.js       # OAuth config
 │   │   │   ├── middleware/
+│   │   │   │   └── auth.js           # JWT middleware
 │   │   │   └── utils/
-│   │   ├── db/
+│   │   │       └── email.js          # Nodemailer
 │   │   ├── Dockerfile
 │   │   └── package.json
+│   │
 │   ├── catalog-service/
-│   │   ├── uploads/          # Product images
-│   │   └── ...
+│   │   ├── src/
+│   │   │   ├── index.js              # Main server
+│   │   │   ├── elasticsearch/        # ES integration
+│   │   │   ├── websocket/            # Real-time updates
+│   │   │   └── utils/
+│   │   │       └── gemini.js         # AI chatbot
+│   │   ├── uploads/                  # Product images
+│   │   ├── Dockerfile
+│   │   └── package.json
+│   │
 │   ├── cart-service/
+│   │   ├── src/
+│   │   │   ├── index.js
+│   │   │   └── utils/
+│   │   ├── Dockerfile
+│   │   └── package.json
+│   │
 │   ├── order-service/
-│   └── payment-service/
+│   │   ├── src/
+│   │   │   ├── index.js
+│   │   │   └── utils/
+│   │   ├── Dockerfile
+│   │   └── package.json
+│   │
+│   ├── payment-service/
+│   │   ├── src/
+│   │   │   ├── index.js
+│   │   │   ├── vnpay.js              # VNPAY integration
+│   │   │   └── qr.js                 # QR code generator
+│   │   ├── .env                      # Payment config
+│   │   ├── Dockerfile
+│   │   └── package.json
+│   │
+│   └── shared/
+│       ├── RedisEventBus.js          # Event bus
+│       └── RedisLockManager.js       # Distributed locks
 │
 ├── gateway/
 │   └── api-gateway/
 │       ├── src/
-│       │   ├── index.js
-│       │   ├── routes.js
-│       │   └── middleware/
-│       └── ...
+│       │   ├── index.js              # Main gateway
+│       │   ├── routes.js             # Route definitions
+│       │   ├── middleware/
+│       │   │   ├── auth.js           # JWT verification
+│       │   │   └── circuitBreaker.js # Circuit breaker
+│       │   └── utils/
+│       ├── Dockerfile
+│       └── package.json
 │
-├── frontend/                  # Customer Web
+├── frontend/                          # Customer Web App
 │   ├── src/
-│   │   ├── pages/            # Home, Products, Cart, Orders
-│   │   ├── components/       # Navbar, Footer, ProductCard
-│   │   ├── context/          # AuthContext, CartContext
-│   │   ├── api/              # API client
-│   │   └── constants/        # vi.js (Vietnamese i18n)
+│   │   ├── App.jsx
+│   │   ├── main.jsx
+│   │   ├── pages/                    # All pages
+│   │   │   ├── Home.jsx
+│   │   │   ├── Products.jsx
+│   │   │   ├── ProductDetail.jsx
+│   │   │   ├── Cart.jsx
+│   │   │   ├── Checkout.jsx
+│   │   │   ├── Orders.jsx
+│   │   │   └── ...
+│   │   ├── components/               # Reusable components
+│   │   │   ├── Header.jsx
+│   │   │   ├── Footer.jsx
+│   │   │   ├── ProductCard.jsx
+│   │   │   ├── AIChatbot.jsx
+│   │   │   └── ...
+│   │   ├── context/                  # State management
+│   │   │   ├── AuthContext.jsx
+│   │   │   ├── CartContext.jsx
+│   │   │   └── ToastContext.jsx
+│   │   ├── api/
+│   │   │   └── client.js             # Axios instance
+│   │   ├── constants/
+│   │   │   ├── vi.js                 # Vietnamese i18n
+│   │   │   └── vietnamLocations.js
+│   │   └── services/                 # API services
 │   ├── public/
-│   │   └── images/           # Logo, banners
-│   └── ...
+│   │   └── images/                   # Static images
+│   ├── Dockerfile
+│   ├── vite.config.js
+│   └── package.json
 │
-├── adminapp/                  # Admin Dashboard
+├── adminapp/                          # Admin Dashboard
 │   ├── src/
-│   │   ├── pages/            # Dashboard, Products, Orders
+│   │   ├── pages/
+│   │   │   ├── DashboardPage.jsx
+│   │   │   ├── ProductsPage.jsx
+│   │   │   ├── OrdersPage.jsx
+│   │   │   ├── CustomersPage.jsx
+│   │   │   ├── CategoriesPage.jsx
+│   │   │   ├── BrandsPage.jsx
+│   │   │   ├── ReviewsPage.jsx
+│   │   │   ├── PromotionsPage.jsx
+│   │   │   └── ...
 │   │   ├── components/
-│   │   └── state/
-│   └── ...
+│   │   │   ├── AutoRefresh.jsx
+│   │   │   ├── FeaturesEditor.jsx
+│   │   │   └── SpecsEditor.jsx
+│   │   ├── state/
+│   │   │   └── AuthContext.jsx
+│   │   └── utils/
+│   │       └── exportExcel.js
+│   ├── Dockerfile
+│   └── package.json
 │
 ├── db/
-│   ├── init-unified.sql      # Database schema
-│   └── README.md
-│
-├── docs/                      # Documentation
-│   ├── ADMIN_ACCOUNT.md
-│   ├── COUPON_SYSTEM.md
-│   ├── VNPAY_INTEGRATION.md
-│   └── DISTRIBUTED_LOCKS_IMPLEMENTATION.md
+│   └── init-unified.sql               # Database initialization
 │
 ├── tools/
-│   ├── seed/
-│   │   └── seed.js           # Data seeding (60+ products)
-│   └── api-tests/
+│   └── seed/
+│       ├── seed.js                    # Data seeding script
+│       ├── fix-terms-encoding.js
+│       └── package.json
 │
-├── docker-compose.yml
-└── README.md
+├── docker-compose.yml                 # Docker orchestration
+├── package.json                       # Root package
+├── README.md                          # This file
+├── test-async-events.js               # Event bus test
+└── test-distributed-locks.js          # Lock system test
 ```
 
 ---
@@ -420,16 +588,39 @@ payments (
 ### Redis Data Structures
 ```
 Keys (with TTL):
-- lock:inventory:{productId}        (10s)  # Inventory update
-- lock:order:create:{userId}        (30s)  # Order creation
-- lock:payment:webhook:{txnRef}     (60s)  # Payment webhook
-- lock:coupon:{couponCode}          (5s)   # Coupon usage
-- lock:cart:{userId}                (5s)   # Cart update
-- ratelimit:auth:login:{email}      (300s) # Login attempts
+- lock:inventory:{productId}        (10s)  # Inventory update lock
+- lock:order:create:{userId}        (30s)  # Order creation lock
+- lock:payment:webhook:{txnRef}     (60s)  # Payment webhook lock
+- lock:coupon:{couponCode}          (5s)   # Coupon usage lock
+- lock:cart:{userId}                (5s)   # Cart update lock
+- ratelimit:auth:login:{email}      (300s) # Login rate limit
+- session:{sessionId}               (3600s) # User sessions
+- cache:product:{productId}         (1800s) # Product cache
+- cache:categories                  (3600s) # Categories cache
 
 Values:
-- String: timestamp + random token
-- Counter: number of attempts
+- Locks: String (timestamp + random token)
+- Rate limits: Counter (số lần thử)
+- Cache: JSON string (serialized data)
+```
+
+### Elasticsearch Indices
+```
+Index: products
+Mappings:
+- name (text, analyzer: standard)
+- description (text)
+- specs (nested object)
+- category_name (keyword)
+- brand_name (keyword)
+- price_cents (long)
+- stock (integer)
+
+Search capabilities:
+- Full-text search trên name, description
+- Filter theo category, brand, price range
+- Fuzzy matching cho typos
+- Highlight search terms
 ```
 
 ---
@@ -444,8 +635,8 @@ Values:
 
 ### Bước 1: Clone Repository
 ```bash
-git clone https://github.com/huynhdai5656/Laptop.git
-cd Laptop
+git clone https://github.com/AHao0164/CK_NodeJS.git
+cd CK_NodeJS
 ```
 
 ### Bước 2: Kiểm Tra Docker
@@ -483,12 +674,18 @@ docker-compose up -d api-gateway frontend adminapp
 ```
 
 **⚠️ LƯU Ý QUAN TRỌNG:**
-- MySQL cần **~20-30 giây** để khởi tạo database hoàn toàn
-- Nếu `auth-service` hoặc `order-service` bị lỗi khi khởi động lần đầu, đây là bình thường
-- Chạy lệnh sau để restart các services sau khi MySQL sẵn sàng:
+- MySQL cần **~30-60 giây** để khởi tạo database hoàn toàn
+- Elasticsearch cần **~60 giây** để khởi động
+- Nếu services bị lỗi khi khởi động lần đầu do MySQL/Elasticsearch chưa sẵn sàng:
 ```bash
-docker-compose restart auth-service order-service catalog-service cart-service
-docker-compose up -d api-gateway frontend adminapp
+# Kiểm tra health status
+docker-compose ps
+
+# Restart các services nếu cần
+docker-compose restart auth-service catalog-service cart-service order-service payment-service
+
+# Hoặc restart toàn bộ
+docker-compose restart
 ```
 
 ### Bước 4: Kiểm Tra Trạng Thái
@@ -553,13 +750,14 @@ node seed.js
 ```
 
 **Seed tạo:**
-- ✅ **2 users:** user1@example.com, hoten051512@gmail.com
 - ✅ **1 admin:** tenho051512@gmail.com (password: admin123456)
-- ✅ **35+ brands** (Apple, ASUS, MSI, Lenovo, Dell...)
-- ✅ **16 categories** (Laptop, PC Components, Gaming Gear...)
-- ✅ **60+ products** với đầy đủ thông tin
-- ✅ **6 banners** cho trang chủ
-- ✅ **Demo orders** để test
+- ✅ **2 demo users:** user1@example.com, user2@example.com (password: 123456)
+- ✅ **35+ brands** (Apple, ASUS, MSI, Lenovo, Dell, Corsair, Logitech...)
+- ✅ **16 categories** (Laptop, PC Components, Gaming Gear, Monitors...)
+- ✅ **60+ products** với đầy đủ specs, images, features
+- ✅ **6 hero banners** cho trang chủ
+- ✅ **Sample coupons** (WELCOME10, FLASH50...)
+- ✅ **Demo reviews** với shop replies
 
 ### Bước 6: Truy Cập Ứng Dụng
 
@@ -584,9 +782,13 @@ URL: http://localhost:5174
 Email: user1@example.com
 Password: 123456
 
-Email: hoten051512@gmail.com
+Email: user2@example.com
 Password: 123456
 ```
+
+**Hoặc đăng nhập bằng:**
+- 🔵 Google Account
+- 🔵 Facebook Account
 
 ### Quản Lý Hệ Thống
 
@@ -681,66 +883,211 @@ docker-compose logs -f --tail=20
 
 ### Cấu Hình Nâng Cao
 
-#### Payment Service (.env file)
-File `.env` đã được tạo tự động với giá trị mặc định (DEMO mode). Nếu cần cấu hình VNPAY thật, chỉnh sửa file `services/payment-service/.env`:
+### Cấu Hình Biến Môi Trường
+
+#### 1. Auth Service - OAuth & Email
+
+File: `docker-compose.yml` → `auth-service` → `environment`
+
+```yaml
+# OAuth2 Configuration
+GOOGLE_CLIENT_ID=your_google_client_id
+GOOGLE_CLIENT_SECRET=your_google_client_secret
+GOOGLE_CALLBACK_URL=http://localhost:8080/auth/google/callback
+
+FACEBOOK_APP_ID=your_facebook_app_id
+FACEBOOK_APP_SECRET=your_facebook_app_secret
+FACEBOOK_CALLBACK_URL=http://localhost:8080/auth/facebook/callback
+
+# Email Service (Nodemailer)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your_email@gmail.com
+SMTP_PASS=your_app_password  # Gmail App Password, not regular password
+
+# Admin Account (Auto-create on startup)
+ADMIN_SEED_EMAIL=tenho051512@gmail.com
+ADMIN_SEED_PASSWORD=admin123456
+ADMIN_SEED_FULLNAME=System Administrator
+```
+
+**Setup Google OAuth:**
+1. Truy cập [Google Cloud Console](https://console.cloud.google.com/)
+2. Tạo project mới → APIs & Services → Credentials
+3. Create OAuth 2.0 Client ID
+4. Application type: Web application
+5. Authorized redirect URIs: `http://localhost:8080/auth/google/callback`
+6. Copy Client ID và Client Secret
+
+**Setup Facebook OAuth:**
+1. Truy cập [Facebook Developers](https://developers.facebook.com/)
+2. Create App → Business → Build Connected Experiences
+3. Add Product → Facebook Login
+4. Settings → Valid OAuth Redirect URIs: `http://localhost:8080/auth/facebook/callback`
+5. Copy App ID và App Secret
+
+**Setup Gmail SMTP:**
+1. Google Account → Security
+2. 2-Step Verification (bật lên)
+3. App passwords → Generate (chọn "Mail" và "Other")
+4. Copy password 16 ký tự
+5. Dán vào `SMTP_PASS`
+
+**Lưu ý:**
+- OAuth không bắt buộc - hệ thống vẫn chạy với email/password login
+- Email service dùng để gửi OTP reset password
+- Admin account được tạo tự động khi auth-service khởi động lần đầu
+
+#### 2. Catalog Service - Elasticsearch & AI
+
+```yaml
+# Elasticsearch Configuration
+ELASTICSEARCH_URL=http://elasticsearch:9200
+
+# AI Chatbot (Google Gemini API)
+GEMINI_API_KEY=your_gemini_api_key
+```
+
+**Setup Gemini API:**
+1. Truy cập [Google AI Studio](https://makersuite.google.com/app/apikey)
+2. Create API Key
+3. Copy và paste vào `GEMINI_API_KEY`
+
+**Lưu ý:**
+- Elasticsearch được khởi động tự động qua docker-compose
+- AI Chatbot không bắt buộc - có thể để trống nếu không dùng
+- Service tự động sync products vào Elasticsearch index
+
+#### 3. Payment Service - VNPAY & QR Banking
+
+File: `services/payment-service/.env` (tạo file này nếu chưa có)
+
 ```env
+# VNPAY Sandbox Configuration
 VNPAY_TMN_CODE=your_tmn_code
 VNPAY_HASH_SECRET=your_hash_secret
 VNPAY_URL=https://sandbox.vnpayment.vn/paymentv2/vpcpay.html
 VNPAY_RETURN_URL=http://localhost:5173/payment/vnpay-return
+
+# QR Code Banking
+BANK_ACC=0123456789
+BANK_CODE=VCB  # Vietcombank
+QR_TEMPLATE=compact
+
+# Service URLs
 ORDER_SERVICE_URL=http://order-service:3004
 ```
 
-**Lưu ý:** 
-- File `.env` đã được tạo sẵn với giá trị DEMO
-- Service sẽ chạy bình thường với giá trị mặc định nếu không có file này
-- Để sử dụng VNPAY thật, cần đăng ký tài khoản VNPAY và cập nhật các giá trị trên
+**Setup VNPAY Sandbox:**
+1. Truy cập [VNPAY Sandbox](https://sandbox.vnpayment.vn/)
+2. Đăng ký tài khoản merchant
+3. Lấy TMN Code và Hash Secret từ dashboard
+4. Cập nhật vào `.env`
 
-#### OAuth Configuration (Google & Facebook Login)
-
-Để sử dụng đăng nhập Google và Facebook, cần cấu hình các biến môi trường:
-
-**1. Tạo file `.env` ở thư mục gốc (hoặc cập nhật docker-compose.yml):**
-```env
-GOOGLE_CLIENT_ID=your_google_client_id
-GOOGLE_CLIENT_SECRET=your_google_client_secret
-FACEBOOK_APP_ID=your_facebook_app_id
-FACEBOOK_APP_SECRET=your_facebook_app_secret
+**Test VNPAY:**
 ```
-
-**2. Hoặc cập nhật trực tiếp trong `docker-compose.yml`:**
-```yaml
-auth-service:
-  environment:
-    - GOOGLE_CLIENT_ID=your_google_client_id
-    - GOOGLE_CLIENT_SECRET=your_google_client_secret
-    - GOOGLE_CALLBACK_URL=http://localhost:8080/auth/google/callback
-    - FACEBOOK_APP_ID=your_facebook_app_id
-    - FACEBOOK_APP_SECRET=your_facebook_app_secret
-    - FACEBOOK_CALLBACK_URL=http://localhost:8080/auth/facebook/callback
+Ngân hàng: NCB
+Số thẻ: 9704198526191432198
+Tên: NGUYEN VAN A
+Ngày phát hành: 07/15
+Mật khẩu OTP: 123456
 ```
-
-**3. Cấu hình OAuth Providers:**
-
-**Google OAuth:**
-1. Truy cập [Google Cloud Console](https://console.cloud.google.com/)
-2. Tạo project mới hoặc chọn project hiện có
-3. Enable Google+ API
-4. Tạo OAuth 2.0 Client ID
-5. Thêm Authorized redirect URIs: `http://localhost:8080/auth/google/callback`
-6. Copy Client ID và Client Secret vào biến môi trường
-
-**Facebook OAuth:**
-1. Truy cập [Facebook Developers](https://developers.facebook.com/)
-2. Tạo App mới
-3. Thêm Facebook Login product
-4. Cấu hình Valid OAuth Redirect URIs: `http://localhost:8080/auth/facebook/callback`
-5. Copy App ID và App Secret vào biến môi trường
 
 **Lưu ý:**
-- Nếu không cấu hình OAuth, các nút Google/Facebook sẽ không hoạt động nhưng hệ thống vẫn chạy bình thường
-- OAuth chỉ hoạt động khi có đầy đủ Client ID và Secret
-- Trong production, cần cập nhật callback URLs với domain thật
+- File `.env` không commit lên Git (đã có trong .gitignore)
+- Service có fallback to COD nếu VNPAY không cấu hình
+- QR Banking dùng VietQR format, không cần API key
+
+#### 4. Frontend Configuration
+
+File: `frontend/vite.config.js` hoặc `docker-compose.yml`
+
+```yaml
+# API Gateway URL
+VITE_API_BASE=http://localhost:8080
+```
+
+**Development:**
+```bash
+# Local development
+cd frontend
+npm run dev
+# Vite auto reload on changes
+```
+
+**Production:**
+```bash
+# Build production bundle
+cd frontend
+npm run build
+# Output: dist/
+```
+
+#### 5. Redis Configuration
+
+```yaml
+# Redis Settings (docker-compose.yml)
+redis:
+  command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+```
+
+**Persistence:**
+- AOF (Append Only File): ON
+- Max memory: 256MB
+- Eviction policy: LRU (Least Recently Used)
+
+**Monitor Redis:**
+```bash
+docker exec -it ck_nodejs-main-redis-1 redis-cli
+
+> INFO memory
+> KEYS *
+> DBSIZE
+> MONITOR  # Real-time commands
+```
+
+#### 6. MySQL Configuration
+
+```yaml
+# MySQL Settings (docker-compose.yml)
+mysql:
+  environment:
+    MYSQL_ROOT_PASSWORD=rootpw
+  volumes:
+    - ./db/init-unified.sql:/docker-entrypoint-initdb.d/init.sql:ro
+```
+
+**Auto-initialization:**
+- Khi MySQL container khởi động lần đầu
+- Chạy `init-unified.sql` tự động
+- Tạo 5 databases và tables
+
+**Access MySQL:**
+```bash
+# CLI
+docker exec -it ck_nodejs-main-mysql-1 mysql -u root -prootpw
+
+# GUI (phpMyAdmin)
+http://localhost:8081
+Username: root
+Password: rootpw
+```
+
+#### Environment Variables Summary
+
+| Service | Required | Optional |
+|---------|----------|----------|
+| **Auth** | JWT_SECRET, DB_* | GOOGLE_*, FACEBOOK_*, SMTP_* |
+| **Catalog** | DB_*, REDIS_* | ELASTICSEARCH_URL, GEMINI_API_KEY |
+| **Cart** | DB_*, REDIS_* | - |
+| **Order** | DB_*, REDIS_* | PAYMENT_SERVICE_URL |
+| **Payment** | - | VNPAY_*, BANK_ACC, BANK_CODE |
+| **Gateway** | All SERVICE_URLs, JWT_SECRET | - |
+
+**Default values:**
+- JWT_SECRET: `devsecret` (⚠️ Đổi trong production!)
+- DB passwords: `rootpw` (⚠️ Đổi trong production!)
+- Ports: Mặc định như trong docker-compose.yml
 
 #### Thay đổi port
 Sửa file `docker-compose.yml`:
@@ -781,13 +1128,20 @@ Email: hoten051512@gmail.com
 Password: 123456
 ```
 
-### VNPAY Test Card
+### VNPAY Test Card (Sandbox)
 ```
+Ngân hàng: NCB
 Số thẻ: 9704198526191432198
 Tên: NGUYEN VAN A
 Ngày phát hành: 07/15
-OTP: 123456
+Mật khẩu OTP: 123456
 ```
+
+### QR Code Banking
+Hệ thống hỗ trợ tạo QR code thanh toán ngân hàng tự động với:
+- Số tài khoản: 0123456789
+- Ngân hàng: Vietcombank (VCB)
+- Nội dung chuyển khoản tự động theo mã đơn hàng
 
 ---
 
@@ -1008,93 +1362,148 @@ Content-Type: multipart/form-data
 ### 🛒 Customer Features
 
 **Trang Chủ**
-- Hero banners (slider)
-- Featured products
-- Category cards
+- Hero banners slider
+- Featured products carousel
+- Category grid cards
+- Promotional banners
 - Dark mode toggle
 
+**Xác Thực**
+- Đăng ký tài khoản
+- Đăng nhập (Email/Password, Google, Facebook)
+- Quên mật khẩu (OTP email)
+- Reset password
+
 **Danh Sách Sản Phẩm**
-- Filter: category, brand, price
-- Search: name, specs
-- Sort: price, name, newest
-- Pagination: 12/page
+- Filter: category, brand, price range
+- Search: name, specs (Elasticsearch)
+- Sort: price (asc/desc), name, newest
+- Pagination: 12 items/page
+- Quick view modal
 
 **Chi Tiết Sản Phẩm**
-- Image gallery
-- Specs (grid 2-3 cột với card design)
+- Image gallery (multiple images)
+- Specs table (responsive grid)
 - Features list
-- Review & rating
+- Review & rating system
 - Related products
-- Add to cart
+- Add to cart với quantity selector
+- Stock availability indicator
 
 **Giỏ Hàng**
-- Real-time sync
-- Update quantity
+- Real-time cart sync
+- Update quantity (+/- buttons)
 - Remove items
-- Coupon input
-- Free shipping
+- Apply coupon code
+- Shipping fee calculation
+- Total summary
 
 **Checkout**
-- Multi-step form
-- Address với province/ward
-- Payment: COD, VNPAY
-- Order summary
+- Multi-step checkout flow
+- Shipping address form (Province/Ward dropdown)
+- Payment method selection:
+  - COD (Cash on Delivery)
+  - VNPAY (Banking)
+  - QR Code Banking
+- Order summary review
+- Terms & conditions
 
 **Đơn Hàng**
-- Order list
-- Order detail
-- Track status
-- Cancel (nếu CONFIRMED)
+- Order history list
+- Order detail view
+- Status tracking
+- Cancel order (if PENDING/CONFIRMED)
+- Re-order function
+- Print invoice
 
 **Tài Khoản**
-- Profile edit
+- Profile management
+- Update personal info
+- Change password
 - Address book
+- Order history
 - Notifications
+
+**AI Chatbot**
+- Product recommendations
+- FAQ assistance
+- Order tracking
+- Powered by Google Gemini
 
 ### 🔧 Admin Features
 
 **Dashboard**
-- Revenue stats
-- Order count by status
-- Top products
-- Recent orders
+- Revenue statistics (daily, monthly, yearly)
+- Order count by status (pie chart)
+- Top selling products
+- Recent orders table
+- User growth chart
+- Low stock alerts
+- Auto-refresh data
 
-**Sản Phẩm**
-- CRUD operations
-- Bulk image upload
+**Quản Lý Sản Phẩm**
+- CRUD operations (Create, Read, Update, Delete)
+- Bulk image upload (multiple files)
 - Inventory management
-- Specs editor (JSON)
+- Advanced specs editor (JSON with validation)
+- Features list editor
+- Product status toggle (active/inactive)
+- Search & filter products
+- Export to Excel
 
-**Đơn Hàng**
-- Order list + filter
-- Update status
-- View customer
-- Print invoice
+**Quản Lý Đơn Hàng**
+- Order list với filter (status, date range, payment method)
+- Order detail view
+- Update order status workflow
+- View customer information
+- Print/Download invoice
+- Bulk actions
+- Order statistics
 
-**Khách Hàng**
-- User list
-- User details
-- Order history
+**Quản Lý Khách Hàng**
+- User list với search
+- User detail profile
+- Order history per user
+- Block/Unblock user
+- Role management (USER/ADMIN)
+- Export customer list
 
-**Khuyến Mãi**
-- Create/edit coupons
-- Validity period
-- Usage limits
-- Promotion banners
+**Quản Lý Khuyến Mãi**
+- Create/Edit coupons
+- Coupon types: PERCENTAGE, FIXED_AMOUNT
+- Validity period (from/to dates)
+- Usage limits (max usage, current usage)
+- Min order value requirement
+- Coupon code generator
+- Active/Inactive toggle
+- Usage tracking
 
 **Danh Mục & Thương Hiệu**
 - CRUD categories
 - CRUD brands
+- Drag-drop ordering
+- Active/Inactive status
 
-**Đánh Giá**
-- View reviews
-- Reply to customers
-- Mark as read
+**Quản Lý Đánh Giá**
+- View all reviews
+- Reply to customer reviews
+- Mark as read/unread
+- Delete inappropriate reviews
+- Filter by product/rating
+- Review statistics
 
-**Banner**
-- Upload images
-- Display order
-- Toggle active
+**Quản Lý Banner**
+- Upload hero banners
+- Edit banner info (title, subtitle, link)
+- Display order management
+- Active/Inactive toggle
+- Preview banner
+
+**Thống Kê & Báo Cáo**
+- Revenue reports
+- Product performance
+- Customer analytics
+- Export reports to Excel
 
 ---
 
@@ -2854,24 +3263,89 @@ class RedisLockManager {
 
 ---
 
-## 🧪 Manual Testing Guide
+## 🧪 Testing
 
-**📄 Xem chi tiết:** [TESTING.md](./TESTING.md)
+### Manual Testing
 
-File TESTING.md chứa hướng dẫn test thủ công chi tiết cho tất cả các distributed locks:
-- ✅ 6 test cases với bước test cụ thể
-- 🛠️ Debug tools và monitoring commands
-- 🔥 Common issues & solutions
-- 📊 Load testing với Artillery
-- ✅ Test results checklist
+**Test Cases cho Distributed Locks:**
 
-**Quick summary test cases:**
-1. **Inventory Lock** - Test overselling với 2 users, 1 stock
-2. **Order Creation Lock** - Test double-click với slow network
-3. **Coupon Usage Lock** - Test 10 users dùng mã giới hạn 5 lượt
-4. **Cart Update Lock** - Test rapid clicks
-5. **Auth Rate Limiting** - Test 6 lần đăng nhập sai
-6. **Payment Webhook Lock** - Test duplicate VNPay IPNs
+1. **Inventory Lock Test**
+   - Mở 2 tabs browser, đăng nhập 2 users khác nhau
+   - Cùng mua sản phẩm còn 1 cái
+   - Kết quả: Chỉ 1 người mua được, người kia báo "Hết hàng"
+
+2. **Order Creation Lock Test**
+   - Slow network (Chrome DevTools → Slow 3G)
+   - Click "Đặt hàng" nhiều lần liên tục
+   - Kết quả: Chỉ tạo 1 đơn hàng
+
+3. **Coupon Usage Lock Test**
+   - Tạo coupon giới hạn 5 lượt
+   - 10 users cùng dùng mã
+   - Kết quả: Chỉ 5 người dùng thành công
+
+4. **Auth Rate Limiting Test**
+   - Đăng nhập sai 6 lần
+   - Kết quả: Bị block sau lần thứ 5
+
+### API Testing với Postman
+
+**Collection Download:** Import từ `tools/api-tests/GearUp.postman_collection.json`
+
+**Test Endpoints:**
+```
+Auth:
+- POST /auth/signup
+- POST /auth/login
+- GET  /auth/me
+
+Products:
+- GET  /catalog/products
+- GET  /catalog/products/:id
+- GET  /catalog/products/search?q=laptop
+
+Cart:
+- POST /cart/items
+- GET  /cart
+- PUT  /cart/items/:id
+- DELETE /cart/items/:id
+
+Orders:
+- POST /orders/checkout
+- GET  /orders
+- POST /orders/validate-coupon
+
+Admin:
+- POST /admin/catalog/products
+- PATCH /admin/orders/:id/status
+```
+
+### Load Testing
+
+```bash
+# Sử dụng test scripts có sẵn
+cd tools
+node test-distributed-locks.js
+node test-async-events.js
+```
+
+### Monitoring
+
+```bash
+# Redis locks
+docker exec -it ck_nodejs-main-redis-1 redis-cli
+> KEYS lock:*
+> MONITOR
+
+# Service logs
+docker-compose logs -f catalog-service
+docker-compose logs -f order-service
+
+# Database
+docker exec -it ck_nodejs-main-mysql-1 mysql -u root -prootpw
+mysql> USE catalog_db;
+mysql> SELECT id, name, stock FROM products WHERE stock < 10;
+```
 
 ---
 
@@ -3479,13 +3953,306 @@ Stress Test Results:
 
 ---
 
+---
+
+## 🎨 Screenshots
+
+### Customer Interface
+- 🏠 **Homepage:** Hero banners, featured products, categories
+- 🛍️ **Product Listing:** Filter, search (Elasticsearch), sort, pagination
+- 📱 **Product Detail:** Image gallery, specs, reviews, add to cart
+- 🛒 **Shopping Cart:** Update quantity, apply coupon, calculate total
+- 💳 **Checkout:** Multi-step form, payment methods (COD, VNPAY, QR)
+- 📦 **Order Tracking:** Order history, status tracking, cancel order
+
+### Admin Dashboard
+- 📊 **Dashboard:** Revenue charts, order statistics, top products
+- 🏷️ **Product Management:** CRUD, inventory, specs editor
+- 📋 **Order Management:** Order list, status update, filters
+- 👥 **Customer Management:** User list, order history per customer
+- 🎫 **Coupon Management:** Create/edit coupons, usage tracking
+- ⭐ **Review Management:** View reviews, reply to customers
+
+---
+
+## 🔐 Security Features
+
+- JWT Authentication với expiry
+- Password hashing (bcryptjs)
+- OAuth2 (Google, Facebook) với Passport.js
+- Rate limiting (Redis-based)
+- CORS configuration
+- Input validation
+- SQL injection prevention (parameterized queries)
+- XSS protection
+- CSRF protection
+
+---
+
+## 📈 Performance Optimization
+
+- **Redis Caching:** Product cache, session cache
+- **Elasticsearch:** Fast full-text search
+- **Distributed Locks:** Prevent race conditions
+- **Image Optimization:** WebP format, lazy loading
+- **Database Indexing:** Indexed foreign keys, search columns
+- **Connection Pooling:** MySQL connection pool
+- **Docker Multi-stage Builds:** Smaller image sizes
+- **Health Checks:** Auto-restart unhealthy containers
+
+---
+
+## 🌐 API Documentation
+
+### Base URL
+```
+Development: http://localhost:8080
+```
+
+### Authentication
+```http
+# Đăng ký
+POST /auth/signup
+Content-Type: application/json
+{
+  "email": "user@example.com",
+  "password": "123456",
+  "fullName": "Nguyen Van A"
+}
+
+# Đăng nhập
+POST /auth/login
+Content-Type: application/json
+{
+  "email": "user@example.com",
+  "password": "123456"
+}
+Response: { "token": "eyJhbG...", "user": {...} }
+
+# Sử dụng token
+Authorization: Bearer eyJhbG...
+```
+
+### Products
+```http
+# Danh sách sản phẩm
+GET /catalog/products?page=1&limit=12&category=1&brand=5&minPrice=1000000&maxPrice=50000000&sortBy=price_asc
+
+# Tìm kiếm (Elasticsearch)
+GET /catalog/products/search?q=macbook&page=1&limit=12
+
+# Chi tiết sản phẩm
+GET /catalog/products/:id
+
+# Thêm review
+POST /catalog/products/:id/reviews
+Authorization: Bearer {token}
+{
+  "rating": 5,
+  "comment": "Sản phẩm tốt!"
+}
+```
+
+### Shopping Cart
+```http
+# Lấy giỏ hàng
+GET /cart
+Authorization: Bearer {token}
+
+# Thêm vào giỏ
+POST /cart/items
+Authorization: Bearer {token}
+{
+  "productId": 5,
+  "quantity": 2
+}
+
+# Cập nhật số lượng
+PUT /cart/items/:id
+Authorization: Bearer {token}
+{
+  "quantity": 3
+}
+
+# Xóa khỏi giỏ
+DELETE /cart/items/:id
+Authorization: Bearer {token}
+```
+
+### Orders
+```http
+# Checkout
+POST /orders/checkout
+Authorization: Bearer {token}
+{
+  "items": [...],
+  "shippingAddress": {...},
+  "paymentMethod": "COD|VNPAY",
+  "couponCode": "WELCOME10"
+}
+
+# Lịch sử đơn hàng
+GET /orders
+Authorization: Bearer {token}
+
+# Chi tiết đơn hàng
+GET /orders/:id
+Authorization: Bearer {token}
+
+# Hủy đơn
+POST /orders/:id/cancel
+Authorization: Bearer {token}
+```
+
+### Admin APIs
+```http
+# Tạo sản phẩm
+POST /admin/catalog/products
+Authorization: Bearer {admin_token}
+Content-Type: multipart/form-data
+{
+  "name": "Product Name",
+  "brandId": 1,
+  "categoryId": 1,
+  "priceCents": 10000000,
+  "stock": 50,
+  "images": [file1, file2]
+}
+
+# Cập nhật trạng thái đơn hàng
+PATCH /admin/orders/:id/status
+Authorization: Bearer {admin_token}
+{
+  "status": "PROCESSING|SHIPPED|DELIVERED"
+}
+
+# Tạo coupon
+POST /admin/coupons
+Authorization: Bearer {admin_token}
+{
+  "code": "FLASH50",
+  "discountType": "PERCENTAGE",
+  "discountValue": 50,
+  "maxUsage": 100,
+  "minOrderValue": 500000,
+  "validFrom": "2024-01-01",
+  "validTo": "2024-12-31"
+}
+```
+
+---
+
+## 🤝 Contributing
+
+Dự án được phát triển cho mục đích học tập. Mọi đóng góp đều được hoan nghênh!
+
+**Setup Development:**
+```bash
+# Clone repo
+git clone https://github.com/AHao0164/CK_NodeJS.git
+cd CK_NodeJS
+
+# Start services
+docker-compose up -d
+
+# Install dependencies cho development
+cd services/auth-service && npm install
+cd ../catalog-service && npm install
+# ... repeat for other services
+
+# Run seed
+cd tools/seed && npm install && node seed.js
+```
+
+**Code Structure:**
+- Services communicate via HTTP (Axios)
+- Shared utilities: `services/shared/`
+- Database migrations: `db/init-unified.sql`
+- Frontend: React + Vite + Tailwind
+- Backend: Node.js + Express + MySQL + Redis + Elasticsearch
+
+---
+
+## 📝 License
+
+This project is for educational purposes.
+
+---
+
+## 👥 Team
+
+- **Backend Development:** Node.js Microservices Architecture
+- **Frontend Development:** React + Tailwind CSS
+- **DevOps:** Docker Containerization
+- **Database Design:** MySQL + Redis + Elasticsearch
+
+---
+
+## 📞 Contact & Support
+
+- **GitHub:** [AHao0164/CK_NodeJS](https://github.com/AHao0164/CK_NodeJS)
+- **Issues:** [Report Bug](https://github.com/AHao0164/CK_NodeJS/issues)
+
+---
+
+## 🎓 Learning Outcomes
+
+Dự án này demo các khái niệm quan trọng:
+
+✅ **Microservices Architecture**
+- Service decomposition
+- Inter-service communication
+- API Gateway pattern
+- Service discovery
+
+✅ **Distributed Systems**
+- Redis distributed locks
+- Event-driven architecture
+- Circuit breaker pattern
+- Graceful degradation
+
+✅ **Database Design**
+- Multiple logical databases
+- Transaction management
+- Indexing strategies
+- Data consistency
+
+✅ **Authentication & Authorization**
+- JWT token-based auth
+- OAuth2 (Google, Facebook)
+- Role-based access control
+- Rate limiting
+
+✅ **Payment Integration**
+- VNPAY Sandbox
+- QR Code banking
+- Webhook handling
+- Idempotency
+
+✅ **Search & Performance**
+- Elasticsearch full-text search
+- Redis caching
+- Database optimization
+- Image optimization
+
+✅ **DevOps Practices**
+- Docker containerization
+- Docker Compose orchestration
+- Health checks
+- Logging & monitoring
+
+---
+
 ## 📚 Tài Liệu Bổ Sung
 
-- `docs/ADMIN_ACCOUNT.md` - Chi tiết admin account
-- `docs/COUPON_SYSTEM.md` - Hệ thống coupon
-- `docs/VNPAY_INTEGRATION.md` - VNPAY integration guide
-- `docs/VNPAY_SANDBOX_SETUP.md` - Setup VNPAY test
-- `docs/DISTRIBUTED_LOCKS_IMPLEMENTATION.md` - Chi tiết lock system
+Các file test và documentation:
+- `test-async-events.js` - Event bus testing
+- `test-distributed-locks.js` - Lock system testing
+- `test-elasticsearch.md` - Elasticsearch integration guide
+
+---
+
+**Made with ❤️ for learning purposes**
 - `LOCK_SYSTEM_QUICKSTART.md` - Quick start locks
 
 ---
