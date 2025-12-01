@@ -1,11 +1,14 @@
 {
   "name": "laptop-seeder",
+  "version": "1.0.0",
+  "description": "Database seeder with beautiful product images from Unsplash",
   "private": true,
   "type": "module",
+  "scripts": {
+    "seed": "node seed.js",
+    "seed:dev": "API_BASE=http://localhost:8080 node seed.js"
+  },
   "dependencies": {
-    "axios": "^1.7.7",
-    "mysql2": "^3.11.0"
+    "axios": "^1.7.7"
   }
 }
-
-

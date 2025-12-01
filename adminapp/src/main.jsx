@@ -1,8 +1,11 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { CssBaseline, ThemeProvider, createTheme } from '@mui/material';
+import { ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
+import './index.css';
 import LoginPage from './pages/LoginPage.jsx';
+import ForgotPasswordPage from './pages/ForgotPasswordPage.jsx';
 import DashboardLayout from './pages/DashboardLayout.jsx';
 import DashboardPage from './pages/DashboardPage.jsx';
 import ProductsPage from './pages/ProductsPage.jsx';
@@ -11,18 +14,10 @@ import BrandsPage from './pages/BrandsPage.jsx';
 import CategoriesPage from './pages/CategoriesPage.jsx';
 import CustomersPage from './pages/CustomersPage.jsx';
 import PromotionsPage from './pages/PromotionsPage.jsx';
+import BannersPage from './pages/BannersPage.jsx';
+import ReviewsPage from './pages/ReviewsPage.jsx';
+import AdminProfilePage from './pages/AdminProfilePage.jsx';
 import { AuthProvider, useAuth } from './state/AuthContext.jsx';
-
-const theme = createTheme({
-  palette: {
-    primary: {
-      main: '#2563eb',
-    },
-  },
-  typography: {
-    fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
-  },
-});
 
 function PrivateRoute({ children }) {
   const { token, user } = useAuth();
@@ -32,33 +27,46 @@ function PrivateRoute({ children }) {
 
 function App() {
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
-      <AuthProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route
-              path="/"
-              element={
-                <PrivateRoute>
-                  <DashboardLayout />
-                </PrivateRoute>
-              }
-            >
-              <Route index element={<Navigate to="/dashboard" replace />} />
-              <Route path="dashboard" element={<DashboardPage />} />
-              <Route path="products" element={<ProductsPage />} />
-              <Route path="orders" element={<OrdersPage />} />
-              <Route path="customers" element={<CustomersPage />} />
-              <Route path="brands" element={<BrandsPage />} />
-              <Route path="categories" element={<CategoriesPage />} />
-              <Route path="promotions" element={<PromotionsPage />} />
-            </Route>
-          </Routes>
-        </BrowserRouter>
-      </AuthProvider>
-    </ThemeProvider>
+    <AuthProvider>
+      <BrowserRouter>
+        <ToastContainer 
+          position="top-right" 
+          autoClose={3000} 
+          hideProgressBar={false}
+          newestOnTop
+          closeOnClick
+          rtl={false}
+          pauseOnFocusLoss
+          draggable
+          pauseOnHover
+          theme="light"
+        />
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route
+            path="/"
+            element={
+              <PrivateRoute>
+                <DashboardLayout />
+              </PrivateRoute>
+            }
+          >
+            <Route index element={<Navigate to="/dashboard" replace />} />
+            <Route path="dashboard" element={<DashboardPage />} />
+            <Route path="products" element={<ProductsPage />} />
+            <Route path="orders" element={<OrdersPage />} />
+            <Route path="reviews" element={<ReviewsPage />} />
+            <Route path="customers" element={<CustomersPage />} />
+            <Route path="brands" element={<BrandsPage />} />
+            <Route path="categories" element={<CategoriesPage />} />
+            <Route path="promotions" element={<PromotionsPage />} />
+            <Route path="banners" element={<BannersPage />} />
+            <Route path="profile" element={<AdminProfilePage />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
   );
 }
 

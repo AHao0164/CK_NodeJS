@@ -2,13 +2,20 @@ import express from 'express';
 import morgan from 'morgan';
 import cors from 'cors';
 import mysql from 'mysql2/promise';
+import axios from 'axios';
+import RedisLockManager from '../shared/RedisLockManager.js';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(morgan('dev'));
 
+// Initialize Redis Lock Manager
+const lockManager = new RedisLockManager();
+
 const PORT = process.env.PORT || 3003;
+const CATALOG_SERVICE_URL = process.env.CATALOG_SERVICE_URL || 'http://catalog-service:3002';
+
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
@@ -16,182 +23,168 @@ const pool = mysql.createPool({
   database: process.env.DB_DATABASE || 'cart_db',
   waitForConnections: true,
   connectionLimit: 10,
+  charset: 'utf8mb4',
+  connectTimeout: 10000
 });
 
-// Wait for database to be ready
-async function waitForDatabase(maxRetries = 30, delay = 1000) {
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      const conn = await pool.getConnection();
-      await conn.ping();
-      conn.release();
-      console.log('Database connection established');
-      return true;
-    } catch (err) {
-      console.log(`Waiting for database... attempt ${i + 1}/${maxRetries}`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-  throw new Error('Could not connect to database after maximum retries');
-}
-
-// Initialize database connection
-async function initializeService() {
-  try {
-    await waitForDatabase();
-  } catch (err) {
-    console.error('Failed to initialize service:', err);
-    process.exit(1);
-  }
-}
-
-initializeService();
+// Execute SET NAMES utf8mb4 on each connection
+pool.on('connection', (connection) => {
+  connection.query("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
+});
 
 function getUserId(req) {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  // Trust gateway to verify token; extract user id via header passed through gateway (optional simplification)
+  // For MVP, accept `x-user-id` header if present
   const hdr = req.headers['x-user-id'];
   if (hdr) return parseInt(hdr, 10);
+  // Fallback: anonymous carts could be implemented later
   return null;
-}
-
-function getSessionId(req) {
-  // For guest users, use session ID from header or generate one
-  return req.headers['x-session-id'] || null;
 }
 
 app.get('/cart', async (req, res) => {
   const userId = getUserId(req);
-  const sessionId = getSessionId(req);
-  
-  if (!userId && !sessionId) {
-    return res.json({ id: null, items: [] }); // Empty cart for guest without session
-  }
-  
-  const conn = await pool.getConnection();
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
-    await conn.beginTransaction();
-    let [[cart]] = userId 
-      ? await conn.query('SELECT * FROM carts WHERE user_id = ?', [userId])
-      : await conn.query('SELECT * FROM carts WHERE session_id = ? AND user_id IS NULL', [sessionId]);
-    
-    if (!cart) {
-      if (userId) {
-        const [result] = await conn.query('INSERT INTO carts (user_id) VALUES (?)', [userId]);
-        [[cart]] = await conn.query('SELECT * FROM carts WHERE id = ?', [result.insertId]);
-      } else if (sessionId) {
-        const [result] = await conn.query('INSERT INTO carts (session_id) VALUES (?)', [sessionId]);
-        [[cart]] = await conn.query('SELECT * FROM carts WHERE id = ?', [result.insertId]);
-      }
-    }
-    const [items] = cart ? await conn.query('SELECT * FROM cart_items WHERE cart_id = ?', [cart.id]) : [[]];
-    await conn.commit();
-    return res.json({ id: cart?.id || null, items });
+    const [items] = await pool.query('SELECT * FROM cart_items WHERE user_id = ?', [userId]);
+    return res.json({ items });
   } catch (e) {
-    await conn.rollback();
+    console.error('Error fetching cart:', e);
     return res.status(500).json({ error: 'Server error' });
-  } finally {
-    conn.release();
   }
 });
 
 app.post('/cart/items', async (req, res) => {
   const userId = getUserId(req);
-  const sessionId = getSessionId(req);
-  
-  if (!userId && !sessionId) {
-    return res.status(400).json({ error: 'Missing user ID or session ID' });
-  }
-  
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   const { productId, quantity, priceCents } = req.body;
-  if (!productId || !quantity || !priceCents) return res.status(400).json({ error: 'Missing fields' });
-  const conn = await pool.getConnection();
+  if (!productId || !quantity) return res.status(400).json({ error: 'Missing fields' });
+  
   try {
-    await conn.beginTransaction();
-    let [[cart]] = userId
-      ? await conn.query('SELECT * FROM carts WHERE user_id = ?', [userId])
-      : await conn.query('SELECT * FROM carts WHERE session_id = ? AND user_id IS NULL', [sessionId]);
+    // Validate stock availability
+    // ⚠️ CHỈ CHECK số lượng đang thêm, KHÔNG tính số lượng đã có trong giỏ
+    // Stock sẽ được check lại khi checkout và chỉ trừ khi thanh toán xong
+    const productRes = await axios.get(`${CATALOG_SERVICE_URL}/catalog/products/${productId}`);
+    const product = productRes.data;
+    const availableStock = product.stock || 0;
     
-    if (!cart) {
-      if (userId) {
-        const [result] = await conn.query('INSERT INTO carts (user_id) VALUES (?)', [userId]);
-        [[cart]] = await conn.query('SELECT * FROM carts WHERE id = ?', [result.insertId]);
-      } else if (sessionId) {
-        const [result] = await conn.query('INSERT INTO carts (session_id) VALUES (?)', [sessionId]);
-        [[cart]] = await conn.query('SELECT * FROM carts WHERE id = ?', [result.insertId]);
-      }
+    // Chỉ check số lượng đang thêm có <= stock hiện tại không
+    if (quantity > availableStock) {
+      return res.status(400).json({ 
+        error: `Không đủ hàng trong kho. Chỉ còn ${availableStock} sản phẩm` 
+      });
     }
-    await conn.query(
-      `INSERT INTO cart_items (cart_id, product_id, quantity, price_cents_snapshot)
-       VALUES (?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity), price_cents_snapshot = VALUES(price_cents_snapshot)`,
-      [cart.id, productId, quantity, priceCents]
+    
+    // Nếu hết hàng
+    if (availableStock === 0) {
+      return res.status(400).json({ 
+        error: 'Sản phẩm đã hết hàng' 
+      });
+    }
+    
+    await pool.query(
+      `INSERT INTO cart_items (user_id, product_id, quantity)
+       VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity)`,
+      [userId, productId, quantity]
     );
-    await conn.commit();
     return res.status(201).json({ ok: true });
   } catch (e) {
-    await conn.rollback();
+    console.error('Error adding to cart:', e);
+    if (e.response) {
+      return res.status(e.response.status).json({ error: e.response.data?.error || 'Catalog service error' });
+    }
     return res.status(500).json({ error: 'Server error' });
-  } finally {
-    conn.release();
   }
 });
 
 app.patch('/cart/items/:itemId', async (req, res) => {
   const userId = getUserId(req);
-  const sessionId = getSessionId(req);
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   const { itemId } = req.params;
   const { quantity } = req.body;
   if (!quantity || quantity < 1) return res.status(400).json({ error: 'Invalid quantity' });
+  
   try {
-    if (userId) {
+    // 🔒 Lock cart updates to prevent race conditions during checkout
+    return await lockManager.withLock(`cart:update:${userId}`, async () => {
+      // Get product_id from cart item
+      const [[cartItem]] = await pool.query(
+        'SELECT product_id FROM cart_items WHERE id = ? AND user_id = ?',
+        [itemId, userId]
+      );
+      
+      if (!cartItem) return res.status(404).json({ error: 'Cart item not found' });
+      
+      // Validate stock availability
+      const productRes = await axios.get(`${CATALOG_SERVICE_URL}/catalog/products/${cartItem.product_id}`);
+      const product = productRes.data;
+      const availableStock = product.stock || 0;
+    
+      if (quantity > availableStock) {
+        return res.status(400).json({ 
+          error: `Không đủ hàng trong kho. Chỉ còn ${availableStock} sản phẩm` 
+        });
+      }
+      
       await pool.query(
-        `UPDATE cart_items ci
-         JOIN carts c ON c.id = ci.cart_id
-         SET ci.quantity = ?
-         WHERE ci.id = ? AND c.user_id = ?`,
+        `UPDATE cart_items SET quantity = ? WHERE id = ? AND user_id = ?`,
         [quantity, itemId, userId]
       );
-    } else if (sessionId) {
-      await pool.query(
-        `UPDATE cart_items ci
-         JOIN carts c ON c.id = ci.cart_id
-         SET ci.quantity = ?
-         WHERE ci.id = ? AND c.session_id = ? AND c.user_id IS NULL`,
-        [quantity, itemId, sessionId]
-      );
-    }
-    return res.json({ ok: true });
+      return res.json({ ok: true });
+    }, { ttlSeconds: 5, throwOnFailure: false });
+    
   } catch (e) {
+    console.error('Error updating cart item:', e);
+    if (e.response) {
+      return res.status(e.response.status).json({ error: e.response.data?.error || 'Catalog service error' });
+    }
     return res.status(500).json({ error: 'Server error' });
   }
 });
 
 app.delete('/cart/items/:itemId', async (req, res) => {
   const userId = getUserId(req);
-  const sessionId = getSessionId(req);
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   const { itemId } = req.params;
   try {
-    if (userId) {
-      await pool.query(
-        `DELETE ci FROM cart_items ci
-         JOIN carts c ON c.id = ci.cart_id
-         WHERE ci.id = ? AND c.user_id = ?`,
-        [itemId, userId]
-      );
-    } else if (sessionId) {
-      await pool.query(
-        `DELETE ci FROM cart_items ci
-         JOIN carts c ON c.id = ci.cart_id
-         WHERE ci.id = ? AND c.session_id = ? AND c.user_id IS NULL`,
-        [itemId, sessionId]
-      );
-    }
+    await pool.query(
+      `DELETE FROM cart_items WHERE id = ? AND user_id = ?`,
+      [itemId, userId]
+    );
     return res.json({ ok: true });
   } catch (e) {
+    console.error('Error deleting cart item:', e);
     return res.status(500).json({ error: 'Server error' });
   }
 });
 
-app.get('/health', (req, res) => res.json({ ok: true }));
+app.get('/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ 
+      status: 'healthy', 
+      service: 'cart-service',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime()
+    });
+  } catch (error) {
+    res.status(503).json({ 
+      status: 'unhealthy', 
+      service: 'cart-service',
+      error: error.message 
+    });
+  }
+});
+
+// Connect to Redis on startup
+lockManager.connect().then(() => {
+  console.log('✅ Cart service Redis lock manager ready');
+}).catch(err => {
+  console.error('❌ Redis connection failed:', err);
+  console.warn('⚠️ Service will run WITHOUT distributed locks');
+});
 
 app.listen(PORT, () => {
   // eslint-disable-next-line no-console
