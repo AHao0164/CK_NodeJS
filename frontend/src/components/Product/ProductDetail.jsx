@@ -544,6 +544,19 @@ const ProductDetail = () => {
       return;
     }
     
+    // ✅ Frontend validation: Chỉ check số lượng đang thêm, KHÔNG tính số lượng đã có trong giỏ
+    // Stock sẽ được check lại khi checkout và chỉ trừ khi thanh toán xong
+    if (availableStock === 0) {
+      toast.show('Sản phẩm đã hết hàng', { type: 'error' });
+      return;
+    }
+    
+    // Chỉ check số lượng đang thêm có <= stock hiện tại không
+    if (quantity > availableStock) {
+      toast.show(`Không đủ hàng trong kho. Chỉ còn ${availableStock} sản phẩm`, { type: 'error' });
+      return;
+    }
+    
     const priceCents = selectedVariant ? selectedVariant.price_cents : (product.price_cents || product.originalPrice || product.price);
     const variantId = selectedVariant ? selectedVariant.id : null;
     
@@ -561,7 +574,9 @@ const ProductDetail = () => {
         await refreshCart();
         toast.show('✓ Đã thêm vào giỏ hàng', { type: 'success' });
       } catch (e) {
-        setError(e.message || 'Lỗi khi thêm vào giỏ hàng');
+        const errorMsg = e?.response?.data?.error || e?.message || 'Lỗi khi thêm vào giỏ hàng';
+        setError(errorMsg);
+        toast.show(errorMsg, { type: 'error' });
       } finally {
         setLoading(false);
       }
@@ -585,8 +600,9 @@ const ProductDetail = () => {
       await refreshCart(); // Refresh cart count (sẽ load từ sessionStorage)
       toast.show('✓ Đã thêm vào giỏ hàng (khách)', { type: 'success' });
     } catch (e) {
-      setError(e.message || 'Lỗi khi thêm vào giỏ hàng khách');
-      toast.show(e.message || 'Lỗi khi thêm vào giỏ hàng khách', { type: 'error' });
+      const errorMsg = e?.response?.data?.error || e?.message || 'Lỗi khi thêm vào giỏ hàng khách';
+      setError(errorMsg);
+      toast.show(errorMsg, { type: 'error' });
     } finally {
       setLoading(false);
     }
@@ -601,14 +617,46 @@ const ProductDetail = () => {
       return;
     }
 
+    // ✅ Frontend validation: Check stock before buy now
+    if (availableStock === 0) {
+      toast.show('Sản phẩm đã hết hàng', { type: 'error' });
+      return;
+    }
+    
+    // Check current cart quantity + quantity to buy
+    let currentQuantityInCart = 0;
+    if (token) {
+      try {
+        const cartData = await api.get('/cart').then(r => r.data);
+        const existingItem = cartData?.items?.find(item => item.product_id === product.id);
+        currentQuantityInCart = existingItem ? existingItem.quantity : 0;
+      } catch (e) {
+        // If cart fetch fails, continue (backend will validate)
+        console.warn('Could not fetch cart for validation:', e);
+      }
+    } else {
+      // Guest cart: check sessionStorage
+      const storedGuestCartItems = JSON.parse(sessionStorage.getItem('guestCartItems') || '[]');
+      const existingItem = storedGuestCartItems.find(item => (item.product_id || item.productId) === product.id);
+      currentQuantityInCart = existingItem ? (existingItem.quantity || 0) : 0;
+    }
+    
+    const requestedTotalQuantity = currentQuantityInCart + quantity;
+    if (requestedTotalQuantity > availableStock) {
+      toast.show(`Không đủ hàng trong kho. Chỉ còn ${availableStock} sản phẩm${currentQuantityInCart > 0 ? ` (bạn đã có ${currentQuantityInCart} trong giỏ)` : ''}`, { type: 'error' });
+      return;
+    }
+
     const priceCents = selectedVariant ? selectedVariant.price_cents : (product.price_cents || product.originalPrice || product.price);
     const variantId = selectedVariant ? selectedVariant.id : null;
 
-    // Đã đăng nhập: hành vi cũ - thêm vào giỏ và chuyển sang trang giỏ hàng
+    // ✅ Mua ngay: Chuyển thẳng đến checkout, không qua giỏ hàng
+    // Đã đăng nhập: Thêm vào giỏ tạm thời rồi chuyển đến checkout với selectedItems
     if (token) {
       try {
         setError('');
         setLoading(true);
+        // Thêm vào giỏ để có item trong cart
         await addItemToCart(api, { 
           productId: product.id, 
           variantId: variantId,
@@ -616,9 +664,27 @@ const ProductDetail = () => {
           priceCents: priceCents 
         });
         await refreshCart();
-        navigate('/cart');
+        
+        // Lấy cart mới để có item vừa thêm
+        const cartData = await api.get('/cart').then(r => r.data);
+        const addedItem = cartData?.items?.find(item => item.product_id === product.id);
+        
+        if (addedItem) {
+          // Chuyển đến checkout với item vừa thêm được chọn
+          navigate('/checkout', {
+            state: {
+              selectedItems: [addedItem],
+              selectedItemIds: [addedItem.id]
+            }
+          });
+        } else {
+          // Fallback: chuyển đến cart nếu không tìm thấy item
+          navigate('/cart');
+        }
       } catch (e) {
-        setError(e.message || 'Lỗi khi thêm vào giỏ hàng');
+        const errorMsg = e?.response?.data?.error || e?.message || 'Lỗi khi thêm vào giỏ hàng';
+        setError(errorMsg);
+        toast.show(errorMsg, { type: 'error' });
         setLoading(false);
       }
       return;
@@ -640,7 +706,9 @@ const ProductDetail = () => {
         }
       });
     } catch (e) {
-      setError(e.message || 'Không thể chuyển tới trang thanh toán');
+      const errorMsg = e?.message || 'Không thể chuyển tới trang thanh toán';
+      setError(errorMsg);
+      toast.show(errorMsg, { type: 'error' });
     }
   };
 

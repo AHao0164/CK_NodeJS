@@ -319,7 +319,27 @@ export default function Checkout() {
       }
     } catch (error) {
       console.error('VNPay error:', error)
-      toast.show('❌ Lỗi kết nối đến VNPay', { type: 'error' })
+      
+      // Handle stock errors
+      if (error?.response?.data?.error === 'OUT_OF_STOCK') {
+        const errorMsg = error.response.data.message || 'Sản phẩm không đủ hàng'
+        const details = error.response.data.details || []
+        const fullMessage = details.length > 0 
+          ? `${errorMsg}:\n${details.map((d, i) => `${i + 1}. ${d}`).join('\n')}`
+          : errorMsg
+        toast.show(`❌ ${fullMessage}`, { type: 'error', duration: 6000 })
+        // Refresh cart to update quantities
+        if (token) {
+          try {
+            const cartData = await fetchCart(api)
+            setCart(cartData)
+          } catch (e) {
+            console.error('Failed to refresh cart:', e)
+          }
+        }
+      } else {
+        toast.show('❌ Lỗi kết nối đến VNPay', { type: 'error' })
+      }
     } finally {
       setLoading(false)
     }
@@ -410,17 +430,37 @@ export default function Checkout() {
       
       // Get detailed error message
       let errorMsg = 'Có lỗi khi tạo đơn hàng hoặc gửi OTP'
-      if (e?.response?.data) {
-        if (e.response.data.message) {
-          errorMsg = e.response.data.message
-        } else if (e.response.data.error) {
-          errorMsg = e.response.data.error
-        } else if (e.response.data.details && Array.isArray(e.response.data.details)) {
-          errorMsg = e.response.data.details.join(', ')
-        }
-      }
       
-      toast.show(`❌ ${errorMsg}`, { type: 'error' })
+      // Handle stock errors specifically
+      if (e?.response?.data?.error === 'OUT_OF_STOCK') {
+        errorMsg = e.response.data.message || 'Sản phẩm không đủ hàng'
+        const details = e.response.data.details || []
+        if (details.length > 0) {
+          errorMsg = `${errorMsg}:\n${details.map((d, i) => `${i + 1}. ${d}`).join('\n')}`
+        }
+        toast.show(`❌ ${errorMsg}`, { type: 'error', duration: 6000 })
+        // Refresh cart to update quantities
+        if (token) {
+          try {
+            const cartData = await fetchCart(api)
+            setCart(cartData)
+          } catch (refreshError) {
+            console.error('Failed to refresh cart:', refreshError)
+          }
+        }
+      } else {
+        // Other errors
+        if (e?.response?.data) {
+          if (e.response.data.message) {
+            errorMsg = e.response.data.message
+          } else if (e.response.data.error) {
+            errorMsg = e.response.data.error
+          } else if (e.response.data.details && Array.isArray(e.response.data.details)) {
+            errorMsg = e.response.data.details.join(', ')
+          }
+        }
+        toast.show(`❌ ${errorMsg}`, { type: 'error' })
+      }
     } finally {
       setLoading(false)
     }
@@ -488,8 +528,27 @@ export default function Checkout() {
       }
     } catch (e) {
       console.error('COD OTP verification failed:', e.response?.data || e.message)
-      const msg = e?.response?.data?.error || e?.response?.data?.message || 'Mã OTP không đúng hoặc đã hết hạn'
-      toast.show(`❌ ${msg}`, { type: 'error' })
+      
+      // Handle stock errors specifically
+      if (e?.response?.data?.error === 'OUT_OF_STOCK' && e?.response?.data?.cancelled) {
+        const errorMsg = e.response.data.message || 'Sản phẩm đã hết hàng. Đơn hàng đã bị hủy.'
+        toast.show(`⚠️ ${errorMsg}`, { type: 'warning', duration: 8000 })
+        setShowCODOtpForm(false)
+        // Refresh cart to update quantities
+        if (token) {
+          try {
+            const cartData = await fetchCart(api)
+            setCart(cartData)
+          } catch (refreshError) {
+            console.error('Failed to refresh cart:', refreshError)
+          }
+        }
+        // Navigate back to cart after showing error
+        setTimeout(() => navigate('/cart'), 3000)
+      } else {
+        const msg = e?.response?.data?.error || e?.response?.data?.message || 'Mã OTP không đúng hoặc đã hết hạn'
+        toast.show(`❌ ${msg}`, { type: 'error' })
+      }
     }
   }
 

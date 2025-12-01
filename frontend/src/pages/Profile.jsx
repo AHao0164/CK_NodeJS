@@ -36,6 +36,7 @@ export default function Profile() {
   const [loyaltyPoints, setLoyaltyPoints] = useState(0)
   const [pointsHistory, setPointsHistory] = useState([])
   const [showPointsHistory, setShowPointsHistory] = useState(false)
+  const [tierInfo, setTierInfo] = useState(null)
 
   useEffect(() => {
     document.title = 'Hồ sơ cá nhân - GearUp';
@@ -48,7 +49,7 @@ export default function Profile() {
         const [u, addrList, pointsData, historyData] = await Promise.all([
           getCurrentUser(api),
           getAddresses(api).catch(() => []),
-          api.get('/auth/loyalty-points').then(r => r.data).catch(() => ({ points: 0, pointsValue: 0 })),
+          api.get('/auth/loyalty-points').then(r => r.data).catch(() => ({ points: 0, pointsValue: 0, tier: null })),
           api.get('/auth/loyalty-points/history').then(r => r.data).catch(() => ({ history: [] }))
         ])
         setMe(u)
@@ -62,6 +63,17 @@ export default function Profile() {
         setAddresses(Array.isArray(addrList) ? addrList : [])
         setLoyaltyPoints(pointsData?.points || 0)
         setPointsHistory(Array.isArray(historyData?.history) ? historyData.history : [])
+        // Set tier info
+        if (pointsData?.tier) {
+          setTierInfo({
+            tier: pointsData.tier,
+            totalEarnedPoints: pointsData.totalEarnedPoints || 0,
+            progress: pointsData.progress || 0,
+            pointsToNextTier: pointsData.pointsToNextTier,
+            nextTierName: pointsData.nextTierName,
+            nextTierLabel: pointsData.nextTierLabel
+          })
+        }
       } catch (e) {
         console.error('Load profile error:', e)
       } finally {
@@ -437,9 +449,67 @@ export default function Profile() {
                   <path d="M8.433 7.418c.155-.103.346-.196.567-.267v1.698a2.305 2.305 0 01-.567-.267C8.07 8.34 8 8.114 8 8c0-.114.07-.34.433-.582zM11 12.849v-1.698c.22.071.412.164.567.267.364.243.433.468.433.582 0 .114-.07.34-.433.582a2.305 2.305 0 01-.567.267z" />
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-13a1 1 0 10-2 0v.092a4.535 4.535 0 00-1.676.662C6.602 6.234 6 7.009 6 8c0 .99.602 1.765 1.324 2.246.48.32 1.054.545 1.676.662v1.941a3.37 3.37 0 01-.448-.08 4.507 4.507 0 01-3.187-3.188C5.716 10.163 5 9.262 5 8c0-1.262.716-2.163 1.228-2.661a4.507 4.507 0 013.187-3.188A3.37 3.37 0 019 2V1a1 1 0 012 0v.092a4.535 4.535 0 001.676.662C13.398 2.766 14 3.991 14 5c0 .99-.602 1.765-1.324 2.246A4.535 4.535 0 0111 7.908v1.941a3.37 3.37 0 01.448.08 4.507 4.507 0 013.187 3.188C15.284 13.837 16 14.738 16 16c0 1.262-.716 2.163-1.228 2.661a4.507 4.507 0 01-3.187 3.188 3.37 3.37 0 01-.448.08V19a1 1 0 10-2 0v-.092a4.535 4.535 0 00-1.676-.662C6.602 17.234 6 16.009 6 15c0-.99.602-1.765 1.324-2.246A4.535 4.535 0 019 12.092v-1.941a3.37 3.37 0 01-.448-.08 4.507 4.507 0 01-3.187-3.188C4.716 6.163 4 5.262 4 4c0-1.262.716-2.163 1.228-2.661a4.507 4.507 0 013.187-3.188A3.37 3.37 0 019 1V0a1 1 0 012 0v.092a4.535 4.535 0 001.676.662C14.398 2.766 15 3.991 15 5c0 .99-.602 1.765-1.324 2.246A4.535 4.535 0 0113 7.908v1.941a3.37 3.37 0 01.448.08 4.507 4.507 0 013.187 3.188C17.284 13.837 18 14.738 18 16c0 1.262-.716 2.163-1.228 2.661a4.507 4.507 0 01-3.187 3.188 3.37 3.37 0 01-.448.08V19a1 1 0 102 0v-.092a4.535 4.535 0 001.676-.662C19.398 17.234 20 16.009 20 15c0-.99-.602-1.765-1.324-2.246A4.535 4.535 0 0117 12.092v-1.941a3.37 3.37 0 01.448-.08 4.507 4.507 0 013.187-3.188C21.284 6.163 22 5.262 22 4c0-1.262-.716-2.163-1.228-2.661z" clipRule="evenodd" />
                 </svg>
-                Điểm thưởng
+                Chương trình khách hàng thân thiết
               </h3>
               
+              {/* Tier Badge */}
+              {tierInfo && tierInfo.tier && (
+                <div className={`bg-gradient-to-br ${tierInfo.tier.bgColor} dark:from-slate-800 dark:to-slate-900 rounded-xl p-6 mb-4 border-2 ${tierInfo.tier.borderColor} dark:border-slate-700`}>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="text-4xl">{tierInfo.tier.icon}</div>
+                      <div>
+                        <div className="text-xs text-slate-600 dark:text-slate-400 mb-1">Hạng thành viên</div>
+                        <div className="text-2xl font-bold" style={{ color: tierInfo.tier.color }}>
+                          {tierInfo.tier.label}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-xs text-slate-600 dark:text-slate-400 mb-1">Tổng điểm tích lũy</div>
+                      <div className="text-lg font-semibold" style={{ color: tierInfo.tier.color }}>
+                        {tierInfo.totalEarnedPoints.toLocaleString('vi-VN')} điểm
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Progress to next tier */}
+                  {tierInfo.pointsToNextTier !== null && tierInfo.pointsToNextTier > 0 && (
+                    <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs text-slate-600 dark:text-slate-400">
+                          Tiến tới hạng <strong>{tierInfo.nextTierLabel}</strong>
+                        </span>
+                        <span className="text-xs font-semibold" style={{ color: tierInfo.tier.color }}>
+                          {tierInfo.progress}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2.5 mb-2">
+                        <div 
+                          className="h-2.5 rounded-full transition-all duration-500"
+                          style={{ 
+                            width: `${tierInfo.progress}%`,
+                            backgroundColor: tierInfo.tier.color
+                          }}
+                        ></div>
+                      </div>
+                      <div className="text-xs text-slate-600 dark:text-slate-400">
+                        Còn <strong>{tierInfo.pointsToNextTier.toLocaleString('vi-VN')} điểm</strong> để lên hạng {tierInfo.nextTierLabel}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {tierInfo.pointsToNextTier === null && (
+                    <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
+                      <div className="text-sm font-semibold" style={{ color: tierInfo.tier.color }}>
+                        🎉 Bạn đã đạt hạng cao nhất!
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              {/* Current Points */}
               <div className="bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-xl p-6 mb-4 border border-blue-200 dark:border-blue-800">
                 <div className="flex items-center justify-between mb-2">
                   <div>

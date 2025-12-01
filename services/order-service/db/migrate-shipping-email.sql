@@ -24,3 +24,5 @@ DEALLOCATE PREPARE alterIfNotExists;
 
 SELECT 'Migration completed: shipping_email column added (if it did not exist)' AS result;
 
+
+

@@ -205,7 +205,11 @@ export default function Cart() {
                   <div className="divide-y divide-slate-200 dark:divide-slate-800">
                     {cart.items.map(it => {
                       const p = detailsOf(it.product_id) || {}
-                      const img = p.image_url || 'https://images.unsplash.com/photo-1517336714731-489689fd1ca8?q=80&w=1200&auto=format&fit=crop'
+                      // ✅ Priority: images[0] (first image from images array sorted by sort_order) > image_url > fallback
+                      // This ensures correct image order when products are added from seed.js
+                      const img = (p.images && Array.isArray(p.images) && p.images.length > 0 && p.images[0].url) 
+                        ? p.images[0].url 
+                        : (p.image_url || 'https://images.unsplash.com/photo-1517336714731-489689fd1ca8?q=80&w=1200&auto=format&fit=crop')
                       // Use price from catalog if available, otherwise fallback to price stored in cart
                       const originalPrice = p.price_cents || it.price_cents || 0
                       const discountPercent = p.discount_percent || 0
