@@ -41,8 +41,8 @@ node tools/seed/seed.js
 - Admin: `tenho051512@gmail.com` / `admin123456`
 - User:
 1. `user1@example.com` / `123456`
-2. `tendemten051512@gmail.com` / '123456'
-3. `hoten051512@gmail.com` / '123456`
+2. `tendemten051512@gmail.com` / `123456'
+3. `hoten051512@gmail.com` / `123456`
 4. `testuser3@example.com` / `123456`
 5. `testuser4@example.com` / `123456`
 6. `testuser5@example.com` / `123456`
