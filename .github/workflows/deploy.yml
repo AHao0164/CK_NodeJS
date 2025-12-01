@@ -26,6 +26,8 @@ jobs:
           echo "Starting deployment..."
           echo "Branch: ${{ github.ref }}"
           echo "Commit: ${{ github.sha }}"
+          echo "Registry: ${{ env.REGISTRY }}"
+          echo "Image Prefix: ${{ env.IMAGE_PREFIX }}"
       
       # Option 1: Deploy to server via SSH
       - name: Deploy via SSH (Optional)
@@ -70,13 +72,12 @@ jobs:
       - name: Deployment summary
         run: |
           echo "✅ Deployment completed!"
-          echo "Services deployed:"
-          echo "  - API Gateway"
-          echo "  - Auth Service"
-          echo "  - Catalog Service"
-          echo "  - Cart Service"
-          echo "  - Order Service"
-          echo "  - Payment Service"
-          echo "  - Admin App"
-          echo "  - Web App"
-
+          echo "Services available for deployment:"
+          echo "  - API Gateway (${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/api-gateway:latest)"
+          echo "  - Auth Service (${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/auth-service:latest)"
+          echo "  - Catalog Service (${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/catalog-service:latest)"
+          echo "  - Cart Service (${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/cart-service:latest)"
+          echo "  - Order Service (${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/order-service:latest)"
+          echo "  - Payment Service (${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/payment-service:latest)"
+          echo "  - Admin App (${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/adminapp:latest)"
+          echo "  - Frontend (${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend:latest)"
