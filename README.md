@@ -40,6 +40,9 @@ node tools/seed/seed.js
 **Tài khoản mặc định:**
 - Admin: `tenho051512@gmail.com` / `admin123456`
 - User: `user1@example.com` / `123456`
+        'tendemten051512@gmail.com' / '123456'
+        'hoten051512@gmail.com' / '123456'
+        
 
 ---
 
