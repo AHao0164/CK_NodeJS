@@ -44,10 +44,8 @@ node tools/seed/seed.js
         'hoten051512@gmail.com' / '123456'
         'testuser3@example.com' / '123456'
         'testuser4@example.com' / '123456'
-        'hoten051512@gmail.com' / '123456'
-        'hoten051512@gmail.com' / '123456'
-    await signupUser('testuser3@example.com', '123456', 'Test User 3');
-  await signupUser('testuser4@example.com', '123456', 'Test User 4');
+        'testuser5@example.com' / '123456'
+        'testuser6@example.com' / '123456'
   await signupUser('testuser5@example.com', '123456', 'Test User 5');
   await signupUser('testuser6@example.com', '123456', 'Test User 6');
         
