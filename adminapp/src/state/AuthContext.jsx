@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 
 const AuthContext = createContext(null);
@@ -18,7 +18,7 @@ export function AuthProvider({ children }) {
   const api = useMemo(() => {
     const instance = axios.create({ 
       baseURL: import.meta.env.VITE_API_BASE || 'http://localhost:8080',
-      timeout: 30000, // 30 seconds timeout
+      timeout: 30000,
     });
     instance.interceptors.request.use((config) => {
       if (token) config.headers.Authorization = `Bearer ${token}`;

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Box,
   Card,
@@ -35,11 +35,9 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
 } from 'recharts';
 import { useAuth } from '../state/AuthContext.jsx';
-import VI from '../constants/vi';
 import { exportToExcel, formatRevenueForExport } from '../utils/exportExcel';
 
 function StatCard({ title, value, subtitle, icon, color = '#2563eb', trend, gradient }) {
@@ -179,7 +177,7 @@ export default function DashboardPage() {
     
     window.addEventListener('storage', handleStorageChange);
     
-    // Also check localStorage periodically (for same-tab updates)
+    // Also check localStorage periodically
     const interval = setInterval(() => {
       const lastUpdate = localStorage.getItem('dashboard_refresh');
       if (lastUpdate && Date.now() - parseInt(lastUpdate) < 1000) {
@@ -228,8 +226,6 @@ export default function DashboardPage() {
       });
 
       // Calculate revenue from DELIVERED orders only
-      // Only count revenue when order is DELIVERED (not CONFIRMED or SHIPPING)
-      // Exclude: CANCELLED, PENDING, CONFIRMED, SHIPPING
       const currentMonthRevenue = currentMonthOrders
         .filter(o => o.status === 'DELIVERED')
         .reduce((sum, o) => sum + (o.total_cents || 0), 0);
@@ -249,8 +245,6 @@ export default function DashboardPage() {
         ((currentMonthOrderCount - lastMonthOrderCount) / lastMonthOrderCount * 100).toFixed(1);
 
       // Calculate total revenue from DELIVERED orders only
-      // Only count revenue when order is DELIVERED
-      // Exclude: CANCELLED, PENDING, CONFIRMED, SHIPPING
       const totalRevenue = orders
         .filter(o => o.status === 'DELIVERED')
         .reduce((sum, o) => sum + (o.total_cents || 0), 0);
@@ -269,8 +263,6 @@ export default function DashboardPage() {
       });
 
       const revenueChart = last7Days.map(date => {
-        // Include orders that are paid/confirmed/delivered/shipping (exclude cancelled/pending)
-        // Note: total_cents is already in VND (not actual cents)
         // Only count DELIVERED orders for revenue
         const dayOrders = orders.filter(o => 
           o.created_at?.startsWith(date) && 
@@ -488,9 +480,9 @@ export default function DashboardPage() {
                 </Typography>
               </Box>
             </Stack>
-            <Box sx={{ width: '100%', height: 250, minHeight: 250 }}>
+            <Box sx={{ width: '100%', height: 250, minHeight: 250, position: 'relative' }}>
               {stats.revenueChart && stats.revenueChart.length > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
+                <ResponsiveContainer width="100%" height={250}>
                   <LineChart data={stats.revenueChart}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis 
@@ -553,9 +545,9 @@ export default function DashboardPage() {
                 Top {Math.min(stats.categoryChart.length, 8)} danh mục
               </Typography>
             </Box>
-            <Box sx={{ width: '100%', height: 340, minHeight: 340 }}>
+            <Box sx={{ width: '100%', height: 340, minHeight: 340, position: 'relative' }}>
               {stats.categoryChart && stats.categoryChart.length > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
+                <ResponsiveContainer width="100%" height={340}>
                   <PieChart>
                   <Pie
                     data={stats.categoryChart.slice(0, 8)}
@@ -630,9 +622,9 @@ export default function DashboardPage() {
                 Theo dõi số lượng đơn hàng trong tuần
               </Typography>
             </Box>
-            <Box sx={{ width: '100%', height: 250, minHeight: 250 }}>
+            <Box sx={{ width: '100%', height: 250, minHeight: 250, position: 'relative' }}>
               {stats.ordersChart && stats.ordersChart.length > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
+                <ResponsiveContainer width="100%" height={250}>
                   <BarChart data={stats.ordersChart}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis 
@@ -750,7 +742,7 @@ export default function DashboardPage() {
           >
             <Box sx={{ mb: 3 }}>
               <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a', mb: 0.5 }}>
-                ⚠️ Cảnh báo tồn kho
+                Cảnh báo tồn kho
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 Sản phẩm sắp hết hàng

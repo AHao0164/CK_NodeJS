@@ -47,6 +47,8 @@ function authMiddleware(req, res, next) {
     { method: 'GET', path: /^\/auth\/terms-conditions$/ },
     { method: 'GET', path: /^\/auth\/privacy-policy$/ },
     { method: 'GET', path: /^\/health$/ },
+    // Get review comments - public endpoint, không yêu cầu đăng nhập (check before general /catalog/ pattern)
+    { method: 'GET', path: /^\/catalog\/reviews\/\d+\/comments$/ },
     { method: 'GET', path: /^\/catalog\// },
     { method: 'GET', path: /^\/uploads\// },
     // Guest cart operations - không yêu cầu đăng nhập
@@ -107,7 +109,22 @@ function authMiddleware(req, res, next) {
   const isPublic = publicPaths.some(
     (r) => r.method === req.method && r.path.test(req.path)
   );
-  if (isPublic) return next();
+  // If path is public, allow it through without authentication check
+  if (isPublic) {
+    // Still try to extract user info if token is present (for logging, etc.)
+    // But don't require it or reject if invalid
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (token) {
+      try {
+        const payload = jwt.verify(token, JWT_SECRET);
+        req.user = { id: payload.sub, email: payload.email, role: payload.role || 'USER' };
+      } catch (e) {
+        // Ignore invalid token for public endpoints
+      }
+    }
+    return next();
+  }
   
   const isProtected = protectedPaths.some(
     (r) => r.method === req.method && r.path.test(req.path)

@@ -63,8 +63,6 @@ app.post('/cart/items', async (req, res) => {
   
   try {
     // Validate stock availability
-    // ⚠️ CHỈ CHECK số lượng đang thêm, KHÔNG tính số lượng đã có trong giỏ
-    // Stock sẽ được check lại khi checkout và chỉ trừ khi thanh toán xong
     const productRes = await axios.get(`${CATALOG_SERVICE_URL}/catalog/products/${productId}`);
     const product = productRes.data;
     const availableStock = product.stock || 0;
@@ -107,7 +105,6 @@ app.patch('/cart/items/:itemId', async (req, res) => {
   if (!quantity || quantity < 1) return res.status(400).json({ error: 'Invalid quantity' });
   
   try {
-    // 🔒 Lock cart updates to prevent race conditions during checkout
     return await lockManager.withLock(`cart:update:${userId}`, async () => {
       // Get product_id from cart item
       const [[cartItem]] = await pool.query(
@@ -180,10 +177,10 @@ app.get('/health', async (req, res) => {
 
 // Connect to Redis on startup
 lockManager.connect().then(() => {
-  console.log('✅ Cart service Redis lock manager ready');
+  console.log('Cart service Redis lock manager ready');
 }).catch(err => {
-  console.error('❌ Redis connection failed:', err);
-  console.warn('⚠️ Service will run WITHOUT distributed locks');
+  console.error('Redis connection failed:', err);
+  console.warn('Service will run WITHOUT distributed locks');
 });
 
 app.listen(PORT, () => {

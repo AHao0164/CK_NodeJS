@@ -1,7 +1,6 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import VI from '../../constants/vi';
 import { listCategories, listBrands } from '../../services/catalog';
 import { getCategoryVietnameseName, getCategoryIcon } from '../../constants/categoryMapping';
 
@@ -11,14 +10,12 @@ const MegaMenu = ({ isOpen, onClose, position = 'bottom-center', items = null })
   const [expandedCategories, setExpandedCategories] = useState(new Set());
   const [dynamicCategories, setDynamicCategories] = useState([]);
   const [dynamicBrands, setDynamicBrands] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
   const navigate = useNavigate();
   const collectionPrefix = '/collections/';
 
   // Fetch dynamic categories and brands on mount
   useEffect(() => {
     const fetchData = async () => {
-      setIsLoading(true);
       try {
         const [cats, brands] = await Promise.all([
           listCategories({ includeProducts: false }),
@@ -29,7 +26,6 @@ const MegaMenu = ({ isOpen, onClose, position = 'bottom-center', items = null })
       } catch (error) {
         console.error('Failed to load menu data:', error);
       } finally {
-        setIsLoading(false);
       }
     };
     fetchData();

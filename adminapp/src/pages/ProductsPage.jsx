@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Button,
@@ -29,7 +29,6 @@ import {
 } from '@mui/material';
 import { Edit, Delete, Add, Search, Image as ImageIcon, DeleteSweep, ArrowUpward, ArrowDownward, FileDownload } from '@mui/icons-material';
 import { useAuth } from '../state/AuthContext.jsx';
-import VI from '../constants/vi';
 import { exportToExcel, formatProductsForExport } from '../utils/exportExcel';
 import SpecsEditor from '../components/SpecsEditor';
 import FeaturesEditor from '../components/FeaturesEditor';
@@ -68,7 +67,7 @@ export default function ProductsPage() {
     setTotal(p.data.total);
     setBrands(b.data);
     setCategories(c.data);
-    setSelectedIds([]); // Clear selection on new data load
+    setSelectedIds([]); 
   };
 
   useEffect(() => { load(); }, [q, sort, page, pageSize, brandFilter, categoryFilter]);
@@ -93,7 +92,7 @@ export default function ProductsPage() {
       setUploading(true);
       const uploadedUrls = [];
 
-      // Upload từng ảnh
+      // Upload each file
       for (const file of files) {
         const formData = new FormData();
         formData.append('image', file);
@@ -132,14 +131,13 @@ export default function ProductsPage() {
       });
     } finally {
       setUploading(false);
-      // Reset input
       event.target.value = '';
     }
   };
 
   const onSave = async () => {
     try {
-      // Đảm bảo discountPercent là số và features là array
+      // Ensure discountPercent is a number and features is an array
       const payload = {
         ...form,
         discountPercent: parseInt(form.discountPercent || '0', 10),
@@ -148,15 +146,15 @@ export default function ProductsPage() {
         specs: form.specs || {}
       };
       
-      console.log('💾 Saving product with payload:', JSON.stringify(payload, null, 2));
+      console.log('Saving product with payload:', JSON.stringify(payload, null, 2));
       
       if (form.id) {
         const response = await api.put(`/admin/catalog/products/${form.id}`, payload);
-        console.log('✅ Update response:', response.data);
+        console.log('Update response:', response.data);
         setSnackbar({ open: true, message: '✓ Cập nhật sản phẩm thành công!', severity: 'success' });
       } else {
         const response = await api.post('/admin/catalog/products', payload);
-        console.log('✅ Create response:', response.data);
+        console.log('Create response:', response.data);
         setSnackbar({ open: true, message: '✓ Thêm sản phẩm mới thành công!', severity: 'success' });
       }
       setOpen(false);
@@ -165,11 +163,11 @@ export default function ProductsPage() {
       setImagePreview('');
       await load();
     } catch (error) {
-      console.error('❌ Save error:', error);
-      console.error('❌ Error response:', error.response?.data);
+      console.error('Save error:', error);
+      console.error('Error response:', error.response?.data);
       setSnackbar({ 
         open: true, 
-        message: '✗ Lưu thất bại: ' + (error.response?.data?.error || error.message), 
+        message: 'Lưu thất bại: ' + (error.response?.data?.error || error.message), 
         severity: 'error' 
       });
     }
@@ -179,10 +177,10 @@ export default function ProductsPage() {
     if (!confirm('Xóa sản phẩm này?')) return;
     try {
       await api.delete(`/admin/catalog/products/${id}`);
-      setSnackbar({ open: true, message: '✓ Đã xóa sản phẩm', severity: 'success' });
+      setSnackbar({ open: true, message: 'Đã xóa sản phẩm', severity: 'success' });
       await load();
     } catch (error) {
-      setSnackbar({ open: true, message: '✗ Xóa thất bại', severity: 'error' });
+      setSnackbar({ open: true, message: 'Xóa thất bại', severity: 'error' });
     }
   };
 
@@ -192,11 +190,11 @@ export default function ProductsPage() {
     
     try {
       await api.post('/admin/catalog/products/bulk-delete', { ids: selectedIds });
-      setSnackbar({ open: true, message: `✓ Đã xóa ${selectedIds.length} sản phẩm`, severity: 'success' });
+      setSnackbar({ open: true, message: `Đã xóa ${selectedIds.length} sản phẩm`, severity: 'success' });
       await load();
     } catch (error) {
       console.error('Bulk delete error:', error);
-      setSnackbar({ open: true, message: '✗ Xóa thất bại', severity: 'error' });
+      setSnackbar({ open: true, message: 'Xóa thất bại', severity: 'error' });
     }
   };
 
@@ -675,7 +673,7 @@ export default function ProductsPage() {
                       Hỗ trợ: JPG, PNG, GIF, WEBP (tối đa 5MB mỗi ảnh)
                     </Typography>
                     <Typography variant="caption" color="primary.main" sx={{ display: 'block', mt: 0.5 }}>
-                      ✨ Có thể chọn nhiều ảnh cùng lúc
+                      Có thể chọn nhiều ảnh cùng lúc
                     </Typography>
                   </Box>
                 )}
@@ -695,7 +693,7 @@ export default function ProductsPage() {
             {form.images && form.images.length > 0 && (
               <Box sx={{ mb: 2, p: 2, bgcolor: '#f8fafc', borderRadius: 2, border: '1px solid #e2e8f0' }}>
                 <Typography variant="subtitle2" sx={{ mb: 1.5, fontWeight: 600, color: 'primary.main' }}>
-                  📷 Ảnh sản phẩm ({form.images.length})
+                  Ảnh sản phẩm ({form.images.length})
                 </Typography>
                 <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap>
                   {form.images.map((imgUrl, idx) => (
@@ -760,7 +758,7 @@ export default function ProductsPage() {
                               [updated[idx - 1], updated[idx]] = [updated[idx], updated[idx - 1]];
                               setForm({ ...form, images: updated, imageUrl: updated[0] });
                               if (idx === 0 || idx === 1) setImagePreview(updated[0]);
-                              setSnackbar({ open: true, message: '↔ Đã di chuyển ảnh', severity: 'info' });
+                              setSnackbar({ open: true, message: 'Đã di chuyển ảnh', severity: 'info' });
                             }}
                             sx={{
                               bgcolor: 'primary.main',
@@ -783,7 +781,7 @@ export default function ProductsPage() {
                               [updated[idx], updated[idx + 1]] = [updated[idx + 1], updated[idx]];
                               setForm({ ...form, images: updated, imageUrl: updated[0] });
                               if (idx === 0) setImagePreview(updated[0]);
-                              setSnackbar({ open: true, message: '↔ Đã di chuyển ảnh', severity: 'info' });
+                              setSnackbar({ open: true, message: 'Đã di chuyển ảnh', severity: 'info' });
                             }}
                             sx={{
                               bgcolor: 'primary.main',
@@ -803,18 +801,18 @@ export default function ProductsPage() {
                           onClick={() => {
                             const updated = form.images.filter((_, i) => i !== idx);
                             
-                            // Nếu xóa hết ảnh, reset form
+                            // Reset form if no images left
                             if (updated.length === 0) {
                               setForm({ ...form, images: [], imageUrl: '' });
                               setImagePreview('');
-                              setSnackbar({ open: true, message: '✓ Đã xóa tất cả ảnh', severity: 'info' });
+                              setSnackbar({ open: true, message: 'Đã xóa tất cả ảnh', severity: 'info' });
                               return;
                             }
                             
-                            // Update form với ảnh đầu tiên làm ảnh chính
+                            // Update form with the first image as the main image
                             setForm({ ...form, images: updated, imageUrl: updated[0] });
                             setImagePreview(updated[0]);
-                            setSnackbar({ open: true, message: '✓ Đã xóa ảnh', severity: 'success' });
+                            setSnackbar({ open: true, message: 'Đã xóa ảnh', severity: 'success' });
                           }}
                           sx={{
                             bgcolor: 'error.main',
@@ -831,7 +829,7 @@ export default function ProductsPage() {
                   ))}
                 </Stack>
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-                  💡 Dùng nút mũi tên để sắp xếp thứ tự ảnh. Ảnh đầu tiên sẽ là ảnh chính.
+                  Dùng nút mũi tên để sắp xếp thứ tự ảnh. Ảnh đầu tiên sẽ là ảnh chính.
                 </Typography>
               </Box>
             )}
@@ -1011,5 +1009,3 @@ export default function ProductsPage() {
     </Box>
   );
 }
-
-

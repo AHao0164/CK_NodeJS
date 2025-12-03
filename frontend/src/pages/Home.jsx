@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useCart } from '../context/CartContext'
 import ProductCard from '../components/ProductCard'
@@ -52,7 +52,6 @@ export default function Home() {
     const discountPercent = Number(p.discount_percent || 0);
     const finalPrice = Math.round(originalPrice * (100 - discountPercent) / 100);
     
-    // ✅ Frontend validation: Chỉ check số lượng đang thêm, KHÔNG tính số lượng đã có trong giỏ
     // Stock sẽ được check lại khi checkout và chỉ trừ khi thanh toán xong
     const availableStock = p.stock || 0;
     const quantityToAdd = 1;
@@ -106,7 +105,6 @@ export default function Home() {
     const discountPercent = Number(p.discount_percent || 0);
     const finalPrice = Math.round(originalPrice * (100 - discountPercent) / 100);
     
-    // ✅ Frontend validation: Check stock before buy now
     const availableStock = p.stock || 0;
     const quantityToBuy = 1;
     
@@ -139,8 +137,6 @@ export default function Home() {
       return;
     }
     
-    // ✅ Mua ngay: Chuyển thẳng đến checkout, không qua giỏ hàng
-    // Đã đăng nhập: Thêm vào giỏ tạm thời rồi chuyển đến checkout với selectedItems
     if (token) {
       try {
         // Thêm vào giỏ để có item trong cart
@@ -184,8 +180,6 @@ export default function Home() {
     })
   }
   
-  // Phân loại dữ liệu cho các block:
-  // - Sản phẩm mới: 8 sản phẩm mới nhất
   const newProducts = products.slice(0, 8)
 
   // - Bán chạy: ưu tiên sản phẩm có giảm giá cao, nếu bằng nhau thì giá cao hơn trước

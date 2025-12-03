@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Box,
   Button,
@@ -227,7 +227,7 @@ export default function BannersPage() {
         >
           <Box sx={{ bgcolor: '#f8fafc', px: 3, py: 2, borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
             <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a' }}>
-              👁️ Xem trước Banner Layout
+              Xem trước Banner Layout
             </Typography>
             <Typography variant="caption" color="text.secondary">
               Hiển thị như trên trang chủ frontend

@@ -68,9 +68,7 @@ app.post('/payment/vnpay/create', (req, res) => {
     }
 
     // Transaction reference and dates
-    // 🔥 FIX: Dùng orderId thật từ database làm TxnRef thay vì timestamp
-    // Điều này giúp mapping chính xác khi cancel/confirm order
-    let txnRef = String(orderId); // Convert orderId to string for VNPay
+    let txnRef = String(orderId); 
     let createDate = moment().format("YYYYMMDDHHmmss");
     let orderInfoText = orderInfo || `Thanh_toan_don_hang_${orderId}`;
     let locale = "vn";
@@ -83,10 +81,9 @@ app.post('/payment/vnpay/create', (req, res) => {
       vnp_TmnCode: tmnCode,
       vnp_Locale: locale,
       vnp_CurrCode: currCode,
-      vnp_TxnRef: txnRef, // Now uses real orderId from database
+      vnp_TxnRef: txnRef, 
       vnp_OrderInfo: orderInfoText,
       vnp_OrderType: "billpayment",
-      // VNPay expects amount multiplied by 100 (no decimal separator)
       vnp_Amount: String(Number(amountCents) * 100),
       vnp_ReturnUrl: returnUrl,
       vnp_IpAddr: ipAddr,
@@ -146,7 +143,7 @@ app.post('/payment/vnpay/create', (req, res) => {
   }
 });
 
-// 🔒 CRITICAL: Verify VNPay IPN/Return callback WITH LOCK (VNPay can send multiple callbacks)
+//CRITICAL: Verify VNPay IPN/Return callback WITH LOCK (VNPay can send multiple callbacks)
 app.get('/payment/vnpay/return', async (req, res) => {
   const query = req.query;
   const txnRef = query.vnp_TxnRef;
@@ -155,7 +152,7 @@ app.get('/payment/vnpay/return', async (req, res) => {
     return res.status(400).json({ success: false, message: 'Missing transaction reference' });
   }
   
-  // 🔒 Lock by transaction reference to prevent duplicate processing
+  //Lock by transaction reference to prevent duplicate processing
   const webhookLockKey = `vnpay:webhook:${txnRef}`;
   
   try {
@@ -166,7 +163,7 @@ app.get('/payment/vnpay/return', async (req, res) => {
     
     if (!result) {
       // Lock acquisition failed - callback already processed
-      console.log(`⚠️ VNPay callback already processed for txnRef: ${txnRef}`);
+      console.log(`VNPay callback already processed for txnRef: ${txnRef}`);
       return res.json({ 
         success: true,
         message: "Thanh toán đã được xử lý",
@@ -219,7 +216,7 @@ async function processVNPayCallback(query) {
 
     if (vnp_SecureHash === checkSum) {
       if (query.vnp_ResponseCode === "00") {
-        // ✅ Payment successful - Call order-service to confirm order and reserve inventory
+        //Payment successful - Call order-service to confirm order and reserve inventory
         const orderId = query.vnp_TxnRef;
         try {
           const ORDER_SERVICE_URL = process.env.ORDER_SERVICE_URL || 'http://order-service:3004';
@@ -247,7 +244,7 @@ async function processVNPayCallback(query) {
             
             // Check if order was cancelled due to out of stock
             if (errorData.error === 'OUT_OF_STOCK' && errorData.cancelled) {
-              console.error(`❌ VNPay order #${orderId} cancelled - Out of stock:`, errorData.message);
+              console.error(`VNPay order #${orderId} cancelled - Out of stock:`, errorData.message);
               return {
                 success: false,
                 message: errorData.message || 'Sản phẩm đã hết hàng. Đơn hàng đã bị hủy.',
@@ -265,7 +262,7 @@ async function processVNPayCallback(query) {
             };
           } else {
             const orderData = await orderResponse.json();
-            console.log(`✅ VNPay order #${orderId} confirmed and stock reserved`);
+            console.log(`VNPay order #${orderId} confirmed and stock reserved`);
             return { 
               success: true,
               message: "Thanh toán thành công", 
@@ -294,7 +291,7 @@ async function processVNPayCallback(query) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }
           });
-          console.log(`❌ VNPay payment failed - Order #${orderId} cancelled`);
+          console.log(`VNPay payment failed - Order #${orderId} cancelled`);
         } catch (err) {
           console.error('Error cancelling order:', err.message);
         }
@@ -356,10 +353,10 @@ app.get('/health', (req, res) => {
 
 // Connect to Redis on startup
 lockManager.connect().then(() => {
-  console.log('✅ Payment service Redis lock manager ready');
+  console.log('Payment service Redis lock manager ready');
 }).catch(err => {
-  console.error('❌ Redis connection failed:', err);
-  console.warn('⚠️ Service will run WITHOUT distributed locks');
+  console.error('Redis connection failed:', err);
+  console.warn('Service will run WITHOUT distributed locks');
 });
 
 app.listen(PORT, () => {

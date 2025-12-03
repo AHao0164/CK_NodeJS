@@ -110,7 +110,7 @@ async function ensureGuestCommentsTable() {
     );
     
     if (tables[0].count === 0) {
-      console.log('📦 Creating guest_comments table...');
+      console.log('Creating guest_comments table...');
       await pool.query(`
         CREATE TABLE IF NOT EXISTS guest_comments (
           id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -123,10 +123,10 @@ async function ensureGuestCommentsTable() {
           INDEX idx_created (created_at)
         )
       `);
-      console.log('✅ guest_comments table created successfully');
+      console.log('guest_comments table created successfully');
     }
   } catch (error) {
-    console.error('❌ Failed to ensure guest_comments table:', error);
+    console.error('Failed to ensure guest_comments table:', error);
     // Don't throw - let the endpoint handle it
   }
 }
@@ -193,12 +193,12 @@ async function initElasticSearchIndex() {
           }
         }
       });
-      console.log('✅ ElasticSearch index created successfully');
+      console.log('ElasticSearch index created successfully');
     } else {
-      console.log('✅ ElasticSearch index already exists');
+      console.log('ElasticSearch index already exists');
     }
   } catch (error) {
-    console.error('❌ Error initializing ElasticSearch index:', error.message);
+    console.error('Error initializing ElasticSearch index:', error.message);
     // Don't throw - allow service to continue with MySQL fallback
   }
 }
@@ -282,7 +282,7 @@ async function bulkSyncProductsToES(products) {
     ]);
 
     await esClient.bulk({ refresh: false, body });
-    console.log(`✅ Synced ${products.length} products to ElasticSearch`);
+    console.log(`Synced ${products.length} products to ElasticSearch`);
   } catch (error) {
     console.error('Error bulk syncing products to ElasticSearch:', error.message);
   }
@@ -492,7 +492,7 @@ app.get('/catalog/products', async (req, res) => {
     }
     
     // Fallback to MySQL search
-    console.log('⚠️ Falling back to MySQL search');
+    console.log('Falling back to MySQL search');
     const offset = (page - 1) * pageSize;
     const whereClauses = [];
     const params = [];
@@ -792,8 +792,6 @@ app.get('/catalog/products/:id/related', async (req, res) => {
   }
 });
 
-// ==================== AI FEATURES ====================
-
 // AI Chatbot: Chat với AI để được tư vấn sản phẩm
 app.post('/catalog/ai/chat', async (req, res) => {
   try {
@@ -847,42 +845,95 @@ app.post('/catalog/ai/chat', async (req, res) => {
     }
     
     // If no specific match, get all products but prioritize by relevance
+    // Giảm từ 100 xuống 50 để tăng tốc độ và tránh timeout
     if (!whereClause) {
-      productsQuery += ` ORDER BY p.id DESC LIMIT 100`;
+      productsQuery += ` ORDER BY p.id DESC LIMIT 50`;
     } else {
-      productsQuery += ` ${whereClause} ORDER BY p.id DESC LIMIT 100`;
+      productsQuery += ` ${whereClause} ORDER BY p.id DESC LIMIT 50`;
     }
     
     const [products] = await pool.query(productsQuery, params);
 
     const chatResult = await chatWithAI(message, products);
 
+    // Validate chatResult - ensure it's not undefined
+    if (!chatResult || typeof chatResult !== 'object') {
+      console.error('Chatbot returned invalid result:', chatResult);
+      // Return 200 with error in body instead of 503 for better UX
+      return res.status(200).json({ 
+        error: 'AI service returned invalid response. Please try again.',
+        response: 'Xin lỗi, tôi không thể xử lý yêu cầu của bạn lúc này. Vui lòng thử lại sau.',
+        suggestedProducts: [],
+        searchKeywords: []
+      });
+    }
+
+    // Check if chatResult has error
+    if (chatResult.error) {
+      console.error('Chatbot returned error:', chatResult.error);
+      // Return 200 with error in body instead of 503 for better UX
+      // Frontend can check error field to show appropriate message
+      return res.status(200).json({ 
+        error: chatResult.error || 'AI service temporarily unavailable. Please try again.',
+        response: chatResult.response || 'Xin lỗi, tôi không thể xử lý yêu cầu của bạn lúc này. Vui lòng thử lại sau.',
+        suggestedProducts: [],
+        searchKeywords: chatResult.searchKeywords || []
+      });
+    }
+
     // Fetch suggested products if any
     let suggestedProducts = [];
-    if (chatResult.suggestedProductIds && chatResult.suggestedProductIds.length > 0) {
-      const placeholders = chatResult.suggestedProductIds.map(() => '?').join(',');
-      const [suggested] = await pool.query(
-        `SELECT p.id, p.name, p.description, p.price_cents, p.discount_percent, p.image_url,
-                b.name AS brand, c.name AS category
-         FROM products p
-         LEFT JOIN brands b ON b.id = p.brand_id
-         LEFT JOIN categories c ON c.id = p.category_id
-         WHERE p.id IN (${placeholders})`,
-        chatResult.suggestedProductIds
-      );
-      parseProductsArray(suggested);
-      suggestedProducts = suggested;
+    if (chatResult.suggestedProductIds && Array.isArray(chatResult.suggestedProductIds) && chatResult.suggestedProductIds.length > 0) {
+      try {
+        const placeholders = chatResult.suggestedProductIds.map(() => '?').join(',');
+        const [suggested] = await pool.query(
+          `SELECT p.id, p.name, p.description, p.price_cents, p.discount_percent, p.image_url,
+                  b.name AS brand, c.name AS category
+           FROM products p
+           LEFT JOIN brands b ON b.id = p.brand_id
+           LEFT JOIN categories c ON c.id = p.category_id
+           WHERE p.id IN (${placeholders})`,
+          chatResult.suggestedProductIds
+        );
+        parseProductsArray(suggested);
+        suggestedProducts = suggested;
+      } catch (dbError) {
+        console.error('Error fetching suggested products:', dbError);
+        // Continue without suggested products
+      }
     }
 
     return res.json({
-      response: chatResult.response,
+      response: chatResult.response || 'Xin lỗi, tôi không thể trả lời câu hỏi này.',
       suggestedProducts: suggestedProducts,
       searchKeywords: chatResult.searchKeywords || [],
       reasoning: chatResult.reasoning || ''
     });
   } catch (error) {
     console.error('AI chat error:', error);
-    return res.status(500).json({ error: 'Failed to process chat request' });
+    console.error('Error stack:', error.stack);
+    
+    // Provide more specific error messages
+    let errorMessage = 'Failed to process chat request';
+    let statusCode = 500;
+    
+    if (error.message?.includes('timeout') || error.message?.includes('TIMEOUT')) {
+      errorMessage = 'Request timeout. Please try again.';
+      statusCode = 504;
+    } else if (error.message?.includes('quota') || error.message?.includes('rate limit') || error.message?.includes('429')) {
+      errorMessage = 'AI service is busy. Please try again in a moment.';
+      statusCode = 503;
+    } else if (error.message?.includes('API_KEY') || error.message?.includes('401')) {
+      errorMessage = 'AI service configuration error.';
+      statusCode = 503;
+    }
+    
+    return res.status(statusCode).json({ 
+      error: errorMessage,
+      response: 'Xin lỗi, có lỗi xảy ra khi xử lý yêu cầu của bạn. Vui lòng thử lại sau.',
+      suggestedProducts: [],
+      searchKeywords: []
+    });
   }
 });
 
@@ -899,14 +950,14 @@ app.post('/catalog/ai/search-by-image', upload.single('image'), async (req, res)
       });
     }
 
-    // Get available products for matching
+    // Get available products for matching - Giảm từ 100 xuống 50 để tăng tốc độ
     const [products] = await pool.query(
       `SELECT p.id, p.name, p.description, p.price_cents, p.discount_percent, p.image_url,
               b.name AS brand, c.name AS category, p.specs, p.features
        FROM products p
        LEFT JOIN brands b ON b.id = p.brand_id
        LEFT JOIN categories c ON c.id = p.category_id
-       LIMIT 100`
+       LIMIT 50`
     );
 
     parseProductsArray(products);
@@ -919,8 +970,16 @@ app.post('/catalog/ai/search-by-image', upload.single('image'), async (req, res)
     // Clean up uploaded file
     fs.unlinkSync(req.file.path);
 
+    // Nếu có error (ví dụ: hình ảnh không liên quan đến điện tử)
     if (searchResult.error) {
-      return res.status(500).json({ error: searchResult.error });
+      const statusCode = searchResult.isRelevant === false ? 200 : 500;
+      return res.status(statusCode).json({ 
+        error: searchResult.error,
+        description: searchResult.description || searchResult.error,
+        matches: [],
+        products: [],
+        searchKeywords: []
+      });
     }
 
     // Fetch matched products
@@ -1202,7 +1261,6 @@ app.post('/catalog/guest-cart', async (req, res) => {
   try {
     await conn.beginTransaction();
 
-    // ✅ Validate stock availability BEFORE adding to cart
     const [[product]] = await conn.query(
       `SELECT p.id, i.stock 
        FROM products p
@@ -1218,7 +1276,6 @@ app.post('/catalog/guest-cart', async (req, res) => {
     
     const availableStock = product.stock || 0;
     
-    // ⚠️ CHỈ CHECK số lượng đang thêm, KHÔNG tính số lượng đã có trong giỏ
     // Stock sẽ được check lại khi checkout và chỉ trừ khi thanh toán xong
     if (availableStock === 0) {
       await conn.rollback();
@@ -2055,7 +2112,6 @@ app.patch('/admin/catalog/inventory/:productId', async (req, res) => {
   }
 });
 
-// ============ BANNERS API ============
 // Get all banners
 app.get('/admin/banners', async (req, res) => {
   try {
@@ -2141,10 +2197,6 @@ app.delete('/admin/banners/:id', async (req, res) => {
     return res.status(500).json({ error: 'Failed to delete banner' });
   }
 });
-
-// ============================
-// PRODUCT REVIEWS APIs
-// ============================
 
 // Public: Get reviews for a product with pagination and rating filter
 app.get('/catalog/products/:id/reviews', async (req, res) => {
@@ -2367,12 +2419,12 @@ app.post('/catalog/products/:id/guest-comments', async (req, res) => {
         [productId, commentText, name]
       );
     } catch (insertError) {
-      console.error('❌ Failed to insert guest comment:', insertError);
-      console.error('   Error code:', insertError.code);
-      console.error('   Error message:', insertError.message);
-      console.error('   Error sqlState:', insertError.sqlState);
-      console.error('   Error sqlMessage:', insertError.sqlMessage);
-      console.error('   Stack:', insertError.stack);
+      console.error('Failed to insert guest comment:', insertError);
+      console.error('Error code:', insertError.code);
+      console.error('Error message:', insertError.message);
+      console.error('Error sqlState:', insertError.sqlState);
+      console.error('Error sqlMessage:', insertError.sqlMessage);
+      console.error('Stack:', insertError.stack);
       
       // Check if it's a foreign key constraint error
       if (insertError.code === 'ER_NO_REFERENCED_ROW_2' || 
@@ -2382,8 +2434,8 @@ app.post('/catalog/products/:id/guest-comments', async (req, res) => {
       }
       // Check if table doesn't exist
       if (insertError.code === 'ER_NO_SUCH_TABLE' || insertError.code === '42S02') {
-        console.error('❌ Table guest_comments does not exist. Please run database migrations.');
-        console.error('   Run: mysql -u root -p catalog_db < services/catalog-service/db/migrate-guest-comments.sql');
+        console.error('Table guest_comments does not exist. Please run database migrations.');
+        console.error('Run: mysql -u root -p catalog_db < services/catalog-service/db/migrate-guest-comments.sql');
         return res.status(500).json({ 
           error: 'Database table not found',
           message: process.env.NODE_ENV === 'development' 
@@ -2600,6 +2652,43 @@ app.patch('/admin/reviews/:id/reply', async (req, res) => {
   }
 });
 
+// Get comments for a review (public endpoint, no auth required)
+app.get('/catalog/reviews/:reviewId/comments', async (req, res) => {
+  try {
+    const { reviewId } = req.params;
+    
+    // Get comments for this review
+    let commentsQuery = `
+      SELECT rc.id, rc.user_id, rc.is_admin, rc.comment, rc.created_at,
+             u.full_name as user_name, u.email as user_email
+      FROM review_comments rc
+      LEFT JOIN auth_db.users u ON rc.user_id = u.id
+      WHERE rc.review_id = ?
+      ORDER BY rc.created_at ASC
+    `;
+    
+    try {
+      const [comments] = await pool.query(commentsQuery, [reviewId]);
+      return res.json({ comments: comments || [] });
+    } catch (joinError) {
+      // Fallback: Get comments without user info
+      console.warn('Failed to load comments with user info:', joinError.message);
+      const [comments] = await pool.query(
+        `SELECT rc.id, rc.user_id, rc.is_admin, rc.comment, rc.created_at,
+                NULL as user_name, NULL as user_email
+         FROM review_comments rc
+         WHERE rc.review_id = ?
+         ORDER BY rc.created_at ASC`,
+        [reviewId]
+      );
+      return res.json({ comments: comments || [] });
+    }
+  } catch (e) {
+    console.error('Get comments error:', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Protected: Post a comment on a review (user or admin)
 // Protected: Add comment to a review
 app.post('/catalog/reviews/:reviewId/comments', async (req, res) => {
@@ -2673,7 +2762,6 @@ app.patch('/admin/products/:id/stock', async (req, res) => {
   }
 });
 
-// 🔒 CRITICAL: Reserve inventory for order (WITH DISTRIBUTED LOCK)
 // Called by order-service during checkout
 app.post('/catalog/inventory/reserve', async (req, res) => {
   const conn = await pool.getConnection();
@@ -2691,7 +2779,6 @@ app.post('/catalog/inventory/reserve', async (req, res) => {
     for (const item of items) {
       const { productId, quantity } = item;
 
-      // 🔒 CRITICAL: Distributed lock để prevent concurrent reservations
       const lockKey = `inventory:reserve:${productId}`;
       const lockToken = await lockManager.acquireLock(lockKey, 5000);
       
@@ -2715,11 +2802,10 @@ app.post('/catalog/inventory/reserve', async (req, res) => {
         const currentStock = inventory ? inventory.stock : 0;
 
         if (currentStock < quantity) {
-          // ❌ OUT OF STOCK
           await conn.rollback();
           await lockManager.releaseLock(lockKey, lockToken);
           conn.release();
-          console.log(`❌ Out of stock for product ${productId}: have ${currentStock}, need ${quantity}`);
+          console.log(`Out of stock for product ${productId}: have ${currentStock}, need ${quantity}`);
           return res.json({ 
             success: false, 
             error: `Không đủ hàng cho sản phẩm ID ${productId}. Còn ${currentStock}, yêu cầu ${quantity}`,
@@ -2727,13 +2813,12 @@ app.post('/catalog/inventory/reserve', async (req, res) => {
           });
         }
 
-        // ✅ Deduct stock
         await conn.query(
           'UPDATE inventory SET stock = stock - ? WHERE product_id = ?',
           [quantity, productId]
         );
 
-        console.log(`✅ Reserved ${quantity} units of product ${productId}. Stock: ${currentStock} → ${currentStock - quantity}`);
+        console.log(`Reserved ${quantity} units of product ${productId}. Stock: ${currentStock} → ${currentStock - quantity}`);
         await lockManager.releaseLock(lockKey, lockToken);
 
       } catch (error) {
@@ -2743,12 +2828,12 @@ app.post('/catalog/inventory/reserve', async (req, res) => {
     }
 
     await conn.commit();
-    console.log(`✅ Successfully reserved inventory for ${items.length} product(s)`);
+    console.log(`Successfully reserved inventory for ${items.length} product(s)`);
     return res.json({ success: true });
 
   } catch (error) {
     await conn.rollback();
-    console.error('❌ Inventory reservation error:', error);
+    console.error('Inventory reservation error:', error);
     return res.status(500).json({ 
       error: error.message || 'Không thể đặt trước hàng. Vui lòng thử lại.',
       success: false 
@@ -2758,7 +2843,6 @@ app.post('/catalog/inventory/reserve', async (req, res) => {
   }
 });
 
-// 🔓 Release reserved inventory (called when order is cancelled)
 app.post('/catalog/inventory/release', async (req, res) => {
   try {
     const { items } = req.body; // [{ productId, quantity }]
@@ -2828,16 +2912,16 @@ async function ensureGuestCartSchema() {
         INDEX idx_product_id (product_id)
       )
     `);
-    console.log('✅ Guest cart tables ready');
+    console.log('Guest cart tables ready');
   } catch (e) {
-    console.error('❌ Error ensuring guest cart schema:', e);
+    console.error('Error ensuring guest cart schema:', e);
   }
 }
 
 // Admin: sync all products to ElasticSearch
 app.post('/admin/catalog/sync-elasticsearch', async (req, res) => {
   try {
-    console.log('🔄 Starting full ElasticSearch sync...');
+    console.log('Starting full ElasticSearch sync...');
     
     // Fetch all products with full data
     const [products] = await pool.query(
@@ -2871,28 +2955,28 @@ app.post('/admin/catalog/sync-elasticsearch', async (req, res) => {
 Promise.all([
   lockManager.connect(),
   setupOrderEventHandlers(pool).then(() => {
-    console.log('✅ Catalog service event handlers ready');
+    console.log('Catalog service event handlers ready');
   })
 ]).then(() => {
-  console.log('✅ Catalog service Redis lock manager ready');
+  console.log('Catalog service Redis lock manager ready');
 }).catch(err => {
-  console.error('❌ Redis connection failed:', err);
-  console.warn('⚠️ Service will run WITHOUT distributed locks and event handlers');
+  console.error('Redis connection failed:', err);
+  console.warn('Service will run WITHOUT distributed locks and event handlers');
 });
 
 // Initialize ElasticSearch on startup
 initElasticSearchIndex().then(() => {
-  console.log('✅ ElasticSearch initialization completed');
+  console.log('ElasticSearch initialization completed');
 }).catch(err => {
-  console.error('❌ ElasticSearch initialization failed:', err);
-  console.warn('⚠️ Service will run with MySQL search only');
+  console.error('ElasticSearch initialization failed:', err);
+  console.warn('Service will run with MySQL search only');
 });
 
 // Ensure guest_comments table exists on startup
 ensureGuestCommentsTable().then(() => {
-  console.log('✅ Guest comments table verified');
+  console.log('Guest comments table verified');
 }).catch(err => {
-  console.error('❌ Failed to verify guest comments table:', err);
+  console.error('Failed to verify guest comments table:', err);
 });
 
 // Ensure schema on startup

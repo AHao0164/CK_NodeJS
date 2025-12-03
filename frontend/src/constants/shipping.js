@@ -1,22 +1,18 @@
-// ============================================
-// SHIPPING FEE CONFIGURATION
-// ============================================
-
 export const SHIPPING_CONFIG = {
   // Free shipping threshold
-  FREE_SHIPPING_THRESHOLD: 2000000, // 2 triệu - Miễn phí toàn bộ
+  FREE_SHIPPING_THRESHOLD: 2000000, 
   
   // City-specific thresholds
-  INNER_CITY_FREE_THRESHOLD: 500000, // 500k - Miễn phí nội thành
+  INNER_CITY_FREE_THRESHOLD: 500000,
   
   // Base shipping fees
-  INNER_CITY_FEE: 20000,    // 20k - Nội thành HN/HCM
-  OTHER_CITY_FEE: 35000,    // 35k - Tỉnh thành khác
-  REMOTE_AREA_FEE: 50000,   // 50k - Vùng xa/hải đảo
+  INNER_CITY_FEE: 20000,    
+  OTHER_CITY_FEE: 35000,   
+  REMOTE_AREA_FEE: 50000,  
   
   // Reduced fee for mid-range orders
-  INNER_CITY_REDUCED_FEE: 0,      // 0k - Nội thành khi > 500k
-  OTHER_CITY_REDUCED_FEE: 20000,  // 20k - Tỉnh khác khi > 500k
+  INNER_CITY_REDUCED_FEE: 0,      
+  OTHER_CITY_REDUCED_FEE: 20000,  
 }
 
 export const INNER_CITIES = ['Hà Nội', 'Hồ Chí Minh']
@@ -27,12 +23,6 @@ export const REMOTE_AREAS = [
   'Cà Mau', 'Bạc Liêu', 'Kiên Giang'
 ]
 
-/**
- * Tính phí vận chuyển dựa trên tổng đơn hàng và địa chỉ
- * @param {number} subtotal - Tổng tiền hàng (chưa bao gồm phí ship)
- * @param {string} city - Tỉnh/Thành phố
- * @returns {number} - Phí vận chuyển
- */
 export function calculateShippingFee(subtotal, city = '') {
   const {
     FREE_SHIPPING_THRESHOLD,
@@ -102,30 +92,13 @@ export function getShippingInfo(subtotal, city = '') {
   }
 }
 
-// ============================================
-// DISCOUNT CODE CONFIGURATION (For future use)
-// ============================================
-
 export const DISCOUNT_TYPES = {
-  PERCENTAGE: 'percentage',  // Giảm %
-  FIXED: 'fixed',           // Giảm số tiền cố định
-  FREE_SHIP: 'free_ship',   // Miễn phí ship
+  PERCENTAGE: 'percentage', 
+  FIXED: 'fixed',           
+  FREE_SHIP: 'free_ship',   
 }
 
-/**
- * Áp dụng mã giảm giá (sẽ implement sau)
- * @param {number} subtotal - Tổng tiền hàng
- * @param {number} shippingFee - Phí vận chuyển
- * @param {string} discountCode - Mã giảm giá
- * @returns {object} - { subtotalDiscount, shippingDiscount, finalTotal, message }
- */
 export function applyDiscountCode(subtotal, shippingFee, discountCode) {
-  // TODO: Implement discount code logic
-  // Example discount codes:
-  // - "FREESHIP": Miễn phí ship
-  // - "GIAMGIA10": Giảm 10%
-  // - "GIAM50K": Giảm 50k
-  
   return {
     subtotalDiscount: 0,
     shippingDiscount: 0,

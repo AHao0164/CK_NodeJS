@@ -1,11 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Box, Card, CardContent, Typography, Table, TableBody, TableCell, TableContainer,
-  TableHead, TableRow, Paper, Chip, Rating, TextField, Button, Dialog, DialogTitle,
-  DialogContent, DialogActions, Select, MenuItem, FormControl, InputLabel, IconButton,
+  TableHead, TableRow, Paper, Chip, Rating, Button, Select, MenuItem, FormControl, InputLabel, IconButton,
   Stack, Alert, Snackbar
 } from '@mui/material';
-import { Delete as DeleteIcon, Reply as ReplyIcon, Refresh as RefreshIcon } from '@mui/icons-material';
+import { Delete as DeleteIcon, Refresh as RefreshIcon } from '@mui/icons-material';
 
 import { useAuth } from '../state/AuthContext';
 
@@ -16,11 +15,6 @@ export default function ReviewsPage() {
   const [loading, setLoading] = useState(false);
   const [ratingFilter, setRatingFilter] = useState('');
   const [replyFilter, setReplyFilter] = useState('');
-  
-  // Reply dialog
-  const [replyDialogOpen, setReplyDialogOpen] = useState(false);
-  const [selectedReview, setSelectedReview] = useState(null);
-  const [replyText, setReplyText] = useState('');
   
   // Toast notification
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
@@ -53,43 +47,6 @@ export default function ReviewsPage() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ratingFilter, replyFilter, api]);
-
-  const handleOpenReplyDialog = (review) => {
-    setSelectedReview(review);
-    setReplyText(review.admin_reply || '');
-    setReplyDialogOpen(true);
-  };
-
-  const handleCloseReplyDialog = () => {
-    setReplyDialogOpen(false);
-    setSelectedReview(null);
-    setReplyText('');
-  };
-
-  const handleSubmitReply = async () => {
-    if (!selectedReview) return;
-    if (!replyText.trim()) {
-      showToast('Vui lòng nhập nội dung phản hồi', 'error');
-      return;
-    }
-
-    try {
-      // Post comment as admin using new endpoint
-      const adminUser = JSON.parse(localStorage.getItem('admin_user') || '{}');
-      await api.post(`/catalog/reviews/${selectedReview.id}/comments`, {
-        userId: adminUser.id,
-        comment: replyText.trim(),
-        isAdmin: true
-      });
-
-      showToast('Phản hồi đã được gửi!', 'success');
-      handleCloseReplyDialog();
-      loadReviews();
-    } catch (err) {
-      console.error('Reply error:', err);
-      showToast(err.response?.data?.error || 'Không thể gửi phản hồi', 'error');
-    }
-  };
 
   const handleDeleteReview = async (id) => {
     if (!window.confirm('Bạn có chắc muốn xóa đánh giá này?')) return;
@@ -324,14 +281,6 @@ export default function ReviewsPage() {
                   </TableCell>
                   <TableCell align="center">
                     <IconButton
-                      color="primary"
-                      size="small"
-                      onClick={() => handleOpenReplyDialog(review)}
-                      title="Phản hồi"
-                    >
-                      <ReplyIcon />
-                    </IconButton>
-                    <IconButton
                       color="error"
                       size="small"
                       onClick={() => handleDeleteReview(review.id)}
@@ -346,79 +295,6 @@ export default function ReviewsPage() {
           </TableBody>
         </Table>
       </TableContainer>
-
-      {/* Reply Dialog */}
-      <Dialog open={replyDialogOpen} onClose={handleCloseReplyDialog} maxWidth="sm" fullWidth>
-        <DialogTitle>
-          Phản hồi đánh giá
-        </DialogTitle>
-        <DialogContent>
-          {selectedReview && (
-            <Box sx={{ mb: 2 }}>
-              <Alert severity="info" sx={{ mb: 2 }}>
-                <Typography variant="body2">
-                  <strong>Sản phẩm:</strong> {selectedReview.product_name || `#${selectedReview.product_id}`}
-                </Typography>
-                <Typography variant="body2">
-                  <strong>Đánh giá:</strong> <Rating value={selectedReview.rating} readOnly size="small" />
-                </Typography>
-                <Typography variant="body2">
-                  <strong>Bình luận:</strong> {selectedReview.comment || '(Không có)'}
-                </Typography>
-              </Alert>
-
-              {/* Existing Comments Thread */}
-              {selectedReview.comments && selectedReview.comments.length > 0 && (
-                <Box sx={{ mb: 2, maxHeight: 300, overflowY: 'auto' }}>
-                  <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 'bold' }}>
-                    Lịch sử phản hồi:
-                  </Typography>
-                  {selectedReview.comments.map((comment) => (
-                    <Box
-                      key={comment.id}
-                      sx={{
-                        mb: 1,
-                        p: 1.5,
-                        borderRadius: 1,
-                        bgcolor: comment.is_admin ? 'primary.50' : 'grey.100',
-                        borderLeft: comment.is_admin ? '4px solid' : 'none',
-                        borderColor: 'primary.main'
-                      }}
-                    >
-                      <Typography variant="caption" sx={{ fontWeight: 'bold', color: comment.is_admin ? 'primary.main' : 'text.secondary' }}>
-                        {comment.user_name || comment.user_email || 'User'}
-                        {comment.is_admin && ' (Admin)'}
-                      </Typography>
-                      <Typography variant="body2" sx={{ mt: 0.5 }}>
-                        {comment.comment}
-                      </Typography>
-                      <Typography variant="caption" sx={{ color: 'text.secondary', mt: 0.5, display: 'block' }}>
-                        {new Date(comment.created_at).toLocaleString('vi-VN')}
-                      </Typography>
-                    </Box>
-                  ))}
-                </Box>
-              )}
-
-              <TextField
-                label="Phản hồi của bạn"
-                multiline
-                rows={4}
-                fullWidth
-                value={replyText}
-                onChange={(e) => setReplyText(e.target.value)}
-                placeholder="Nhập phản hồi cho khách hàng..."
-              />
-            </Box>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCloseReplyDialog}>Hủy</Button>
-          <Button onClick={handleSubmitReply} variant="contained" color="primary">
-            Lưu phản hồi
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       {/* Snackbar for notifications */}
       <Snackbar

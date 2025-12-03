@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS otp_verifications (
 -- OTP codes table for COD verification
 CREATE TABLE IF NOT EXISTS otp_codes (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  user_id BIGINT NOT NULL,
+  user_id BIGINT NULL, -- Allow NULL for guest users
   email VARCHAR(255) NOT NULL,
   code VARCHAR(10) NOT NULL,
   type ENUM('COD','EMAIL_VERIFY','PASSWORD_RESET') DEFAULT 'COD',
@@ -47,9 +47,10 @@ CREATE TABLE IF NOT EXISTS otp_codes (
   used TINYINT(1) DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-  UNIQUE KEY unique_user_type (user_id, type),
+  UNIQUE KEY unique_user_type (user_id, type, email), -- Include email for guest users
   INDEX idx_email (email),
-  INDEX idx_expires (expires_at)
+  INDEX idx_expires (expires_at),
+  INDEX idx_user_email (user_id, email)
 );
 
 -- Password reset tokens table (for token-based password reset)

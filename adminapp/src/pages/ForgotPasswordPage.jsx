@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { FaEye, FaEyeSlash, FaHome, FaEnvelope, FaLock, FaKey } from 'react-icons/fa';
 
 const ForgotPasswordPage = () => {
   const navigate = useNavigate();
-  const [step, setStep] = useState(1); // 1: Email, 2: OTP, 3: New Password
+  const [step, setStep] = useState(1);
   const [email, setEmail] = useState('');
   const [otp, setOtp] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -43,7 +43,7 @@ const ForgotPasswordPage = () => {
       const data = await response.json();
 
       if (response.ok) {
-        setSuccess('✅ Mã OTP đã được gửi đến email của bạn');
+        setSuccess('Mã OTP đã được gửi đến email của bạn');
         setStep(2);
         setCountdown(120); // 2 minutes
         setError('');
@@ -86,7 +86,7 @@ const ForgotPasswordPage = () => {
       const data = await response.json();
 
       if (response.ok) {
-        setSuccess('✅ Xác thực OTP thành công');
+        setSuccess('Xác thực OTP thành công');
         setStep(3);
         setError('');
       } else {
@@ -129,7 +129,7 @@ const ForgotPasswordPage = () => {
       const data = await response.json();
 
       if (response.ok) {
-        setSuccess('✅ Đặt lại mật khẩu thành công!');
+        setSuccess('Đặt lại mật khẩu thành công!');
         setTimeout(() => navigate('/login'), 2000);
       } else {
         setError(data.error || 'Không thể đặt lại mật khẩu');
@@ -268,7 +268,7 @@ const ForgotPasswordPage = () => {
 
               {countdown === 0 && (
                 <div className="text-center text-sm text-red-600 font-semibold">
-                  ⚠️ Mã OTP đã hết hạn! Vui lòng gửi lại mã mới.
+                  Mã OTP đã hết hạn! Vui lòng gửi lại mã mới.
                 </div>
               )}
 
@@ -353,7 +353,7 @@ const ForgotPasswordPage = () => {
               </div>
 
               {newPassword && confirmPassword && newPassword !== confirmPassword && (
-                <p className="text-red-600 text-sm">⚠️ Mật khẩu xác nhận không khớp</p>
+                <p className="text-red-600 text-sm">Mật khẩu xác nhận không khớp</p>
               )}
 
               <button

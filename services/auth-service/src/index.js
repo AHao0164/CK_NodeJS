@@ -13,7 +13,7 @@ import RedisLockManager from '../shared/RedisLockManager.js';
 import { setupOrderEventHandlers } from './eventHandlers.js';
 
 const app = express();
-app.disable('etag'); // Disable ETag to prevent 304 responses
+app.disable('etag'); 
 
 // Initialize Redis Lock Manager
 const lockManager = new RedisLockManager();
@@ -348,10 +348,10 @@ app.post('/auth/ensure-guest', async (req, res) => {
 
     return res.status(201).json({ id: result.insertId, email, existing: false });
   } catch (e) {
-    console.error('❌ ensure-guest error:', e);
-    console.error('   Error message:', e.message);
-    console.error('   Error code:', e.code);
-    console.error('   Error stack:', e.stack);
+    console.error('ensure-guest error:', e);
+    console.error('Error message:', e.message);
+    console.error('Error code:', e.code);
+    console.error('Error stack:', e.stack);
     return res.status(500).json({ 
       error: 'Server error',
       message: process.env.NODE_ENV === 'development' ? e.message : 'Failed to create guest account'
@@ -363,9 +363,8 @@ app.post('/auth/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Missing fields' });
   
-  // 🔒 CRITICAL: Rate limit login attempts to prevent brute force attacks
   const rateLimitKey = `login:${email}`;
-  const rateLimit = await lockManager.rateLimit(rateLimitKey, 5, 300); // 5 attempts per 5 minutes
+  const rateLimit = await lockManager.rateLimit(rateLimitKey, 5, 300);
   
   if (!rateLimit.allowed) {
     const resetInSeconds = rateLimit.resetAt - Math.floor(Date.now() / 1000);
@@ -396,7 +395,7 @@ app.post('/auth/login', async (req, res) => {
     const roleClaim = user.role || (adminEmail && user.email === adminEmail ? 'ADMIN' : 'USER');
     const token = jwt.sign({ sub: user.id, email: user.email, role: roleClaim }, JWT_SECRET, { expiresIn: '7d' });
     
-    console.log(`✅ Login successful for ${email}, remaining attempts: ${rateLimit.remaining}`);
+    console.log(`Login successful for ${email}, remaining attempts: ${rateLimit.remaining}`);
     return res.json({ token });
   } catch (e) {
     console.error('Login error:', e);
@@ -470,6 +469,44 @@ app.post('/auth/change-password', async (req, res) => {
     const hash = await bcrypt.hash(newPassword, 10);
     await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, payload.sub]);
     return res.json({ ok: true });
+  } catch (e) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+});
+
+// Only allows if email matches ADMIN_SEED_EMAIL, ADMIN_EMAIL, or seed pattern
+app.post('/auth/promote-admin', async (req, res) => {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token) return res.status(401).json({ error: 'Missing token' });
+  
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    const [users] = await pool.query('SELECT id, email FROM users WHERE id = ?', [payload.sub]);
+    if (users.length === 0) return res.status(404).json({ error: 'User not found' });
+    
+    const user = users[0];
+    const adminSeedEmail = process.env.ADMIN_SEED_EMAIL;
+    const adminEmail = process.env.ADMIN_EMAIL;
+    
+    // Allow if email matches configured admin emails or seed pattern
+    let canPromote = false;
+    
+    if (adminSeedEmail && user.email === adminSeedEmail) {
+      canPromote = true;
+    } else if (adminEmail && user.email === adminEmail) {
+      canPromote = true;
+    } else if (user.email.match(/^admin-\d+@seed\.local$/)) {
+      // Allow seed-generated admin emails
+      canPromote = true;
+    }
+    
+    if (canPromote) {
+      await pool.query('UPDATE users SET role = "ADMIN" WHERE id = ?', [user.id]);
+      return res.json({ ok: true, message: 'User promoted to ADMIN' });
+    }
+    
+    return res.status(403).json({ error: 'Email does not match configured admin email or seed pattern' });
   } catch (e) {
     return res.status(401).json({ error: 'Invalid token' });
   }
@@ -1141,10 +1178,6 @@ app.get('/auth/profile', async (req, res) => {
   }
 });
 
-// ===============================
-// Shipping Addresses Management
-// ===============================
-
 // Helper to extract user id from Authorization header
 async function getUserIdFromRequest(req, res) {
   const authHeader = req.headers.authorization || '';
@@ -1542,7 +1575,7 @@ app.post('/auth/send-cod-otp', async (req, res) => {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   
-  console.log('📧 Send COD OTP request:', {
+  console.log('Send COD OTP request:', {
     hasToken: !!token,
     email: req.body?.email,
     orderId: req.body?.orderId
@@ -1559,26 +1592,89 @@ app.post('/auth/send-cod-otp', async (req, res) => {
       try {
         const payload = jwt.verify(token, JWT_SECRET);
         userId = payload.sub;
-        console.log('✅ Authenticated user:', userId);
+        console.log('Authenticated user:', userId);
       } catch (jwtError) {
         // Invalid token, but allow guest to continue
-        console.warn('⚠️ Invalid token for COD OTP, treating as guest:', jwtError.message);
+        console.warn('Invalid token for COD OTP, treating as guest:', jwtError.message);
       }
     } else {
-      console.log('👤 Guest user (no token)');
+      console.log('Guest user (no token)');
     }
     
     const otp = generateOTP();
     
+    // For guest users, ensure a user exists (create if needed) so we can store OTP
+    let finalUserId = userId;
+    if (!finalUserId) {
+      try {
+        // Check if user exists by email
+        const [existingUsers] = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
+        if (existingUsers.length > 0) {
+          finalUserId = existingUsers[0].id;
+          console.log(`Found existing user for guest: ${finalUserId}`);
+        } else {
+          // Create a guest user with random password
+          const randomPassword = crypto.randomBytes(16).toString('hex');
+          const passwordHash = await bcrypt.hash(randomPassword, 10);
+          const [result] = await pool.query(
+            'INSERT INTO users (email, password_hash) VALUES (?, ?)',
+            [email, passwordHash]
+          );
+          finalUserId = result.insertId;
+          console.log(`Created guest user for COD OTP: ${finalUserId}`);
+        }
+      } catch (userError) {
+        console.error('Failed to create/find guest user:', userError);
+        // Continue anyway - try to insert with NULL (if schema allows)
+        finalUserId = null;
+      }
+    }
+    
     // Store OTP in database with 3 minute expiry
-    // For guest users, user_id will be NULL and we use email as identifier
     const expiresAt = new Date(Date.now() + 3 * 60 * 1000);
-    await pool.execute(
-      'INSERT INTO otp_codes (user_id, email, code, type, expires_at) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE email = ?, code = ?, expires_at = ?',
-      [userId, email, otp, 'COD', expiresAt, email, otp, expiresAt]
-    );
+    try {
+      // Try with user_id first, fallback to NULL if needed
+      if (finalUserId) {
+        await pool.execute(
+          'INSERT INTO otp_codes (user_id, email, code, type, expires_at) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE email = ?, code = ?, expires_at = ?',
+          [finalUserId, email, otp, 'COD', expiresAt, email, otp, expiresAt]
+        );
+      } else {
+        // Fallback: try with NULL user_id (if schema allows)
+        await pool.execute(
+          'INSERT INTO otp_codes (user_id, email, code, type, expires_at) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE email = ?, code = ?, expires_at = ?',
+          [null, email, otp, 'COD', expiresAt, email, otp, expiresAt]
+        );
+      }
+      console.log('OTP stored in database');
+    } catch (dbError) {
+      console.error('Failed to store OTP in database:', dbError);
+      // If error is about user_id, try to create user and retry
+      if (dbError.message.includes('user_id') && !finalUserId) {
+        try {
+          const randomPassword = crypto.randomBytes(16).toString('hex');
+          const passwordHash = await bcrypt.hash(randomPassword, 10);
+          const [result] = await pool.query(
+            'INSERT INTO users (email, password_hash) VALUES (?, ?)',
+            [email, passwordHash]
+          );
+          finalUserId = result.insertId;
+          // Retry insert with user_id
+          await pool.execute(
+            'INSERT INTO otp_codes (user_id, email, code, type, expires_at) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE email = ?, code = ?, expires_at = ?',
+            [finalUserId, email, otp, 'COD', expiresAt, email, otp, expiresAt]
+          );
+          console.log('OTP stored after creating user');
+        } catch (retryError) {
+          console.error('Failed to store OTP even after creating user:', retryError);
+          return res.status(500).json({ error: 'Failed to store OTP', details: retryError.message });
+        }
+      } else {
+        return res.status(500).json({ error: 'Failed to store OTP', details: dbError.message });
+      }
+    }
 
-    // Send email
+    // Send email (non-blocking - if email fails, OTP is still valid)
     const itemsList = items?.map(it => `- ${it.name} x${it.quantity}: ${((it.price || 0) / 100).toLocaleString()}₫`).join('\n') || '';
     const sentTime = new Date();
     const expiryTime = new Date(sentTime.getTime() + 3 * 60 * 1000);
@@ -1592,58 +1688,68 @@ app.post('/auth/send-cod-otp', async (req, res) => {
       hour12: false 
     });
     
-    console.log('Sending COD OTP email to:', email);
-    const mailResult = await transporter.sendMail({
-      from: process.env.SMTP_USER || 'GearUp <noreply@gearup.vn>',
-      to: email,
-      subject: '🛒 Mã OTP xác nhận đơn hàng GearUp',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
-          <div style="background-color: white; border-radius: 12px; padding: 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
-            <div style="text-align: center; margin-bottom: 30px;">
-              <h1 style="color: #2563eb; margin: 0; font-size: 28px;">GearUp</h1>
-              <p style="color: #64748b; margin: 5px 0 0 0;">Công nghệ - Đam mê - Chất lượng</p>
-            </div>
-            
-            <h2 style="color: #1e293b; margin-bottom: 20px;">Xác nhận đơn hàng COD</h2>
-            
-            <p style="color: #475569; line-height: 1.6;">Chào bạn,</p>
-            <p style="color: #475569; line-height: 1.6;">Cảm ơn bạn đã đặt hàng tại GearUp. Để hoàn tất đơn hàng thanh toán khi nhận hàng (COD), vui lòng nhập mã OTP bên dưới:</p>
-            
-            <div style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); border-radius: 12px; padding: 25px; text-align: center; margin: 30px 0;">
-              <p style="color: white; margin: 0 0 10px 0; font-size: 14px;">MÃ OTP CỦA BẠN</p>
-              <p style="color: white; font-size: 42px; font-weight: bold; letter-spacing: 8px; margin: 0; font-family: 'Courier New', monospace;">${otp}</p>
-              <p style="color: #dbeafe; margin: 10px 0 0 0; font-size: 12px;">Có hiệu lực trong 3 phút</p>
-            </div>
-            
-            <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; border-radius: 4px; margin: 20px 0;">
-              <p style="color: #92400e; margin: 0 0 8px 0; font-size: 14px;"><strong>⏰ Thời gian gửi mã:</strong></p>
-              <p style="color: #92400e; margin: 0; font-size: 13px;">📅 ${formatTime(sentTime)}</p>
-              <p style="color: #92400e; margin: 8px 0 0 0; font-size: 14px;"><strong>⌛ Mã hết hạn lúc:</strong></p>
-              <p style="color: #92400e; margin: 0; font-size: 13px;">📅 ${formatTime(expiryTime)}</p>
-            </div>
-            
-            <div style="background-color: #f1f5f9; border-radius: 8px; padding: 20px; margin: 20px 0;">
-              <h3 style="color: #1e293b; margin: 0 0 15px 0; font-size: 16px;">📦 Chi tiết đơn hàng:</h3>
-              <pre style="color: #475569; margin: 0; white-space: pre-wrap; font-family: inherit; line-height: 1.8;">${itemsList}</pre>
-              <div style="border-top: 2px solid #cbd5e1; margin-top: 15px; padding-top: 15px;">
-                <p style="color: #1e293b; font-size: 18px; font-weight: bold; margin: 0;">Tổng thanh toán: ${((orderTotal || 0) / 100).toLocaleString()}₫</p>
+    // Try to send email, but don't fail the request if email fails
+    try {
+      console.log('📧 Attempting to send COD OTP email to:', email);
+      const mailResult = await transporter.sendMail({
+        from: process.env.SMTP_USER || 'GearUp <noreply@gearup.vn>',
+        to: email,
+        subject: '🛒 Mã OTP xác nhận đơn hàng GearUp',
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
+            <div style="background-color: white; border-radius: 12px; padding: 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+              <div style="text-align: center; margin-bottom: 30px;">
+                <h1 style="color: #2563eb; margin: 0; font-size: 28px;">GearUp</h1>
+                <p style="color: #64748b; margin: 5px 0 0 0;">Công nghệ - Đam mê - Chất lượng</p>
               </div>
+              
+              <h2 style="color: #1e293b; margin-bottom: 20px;">Xác nhận đơn hàng COD</h2>
+              
+              <p style="color: #475569; line-height: 1.6;">Chào bạn,</p>
+              <p style="color: #475569; line-height: 1.6;">Cảm ơn bạn đã đặt hàng tại GearUp. Để hoàn tất đơn hàng thanh toán khi nhận hàng (COD), vui lòng nhập mã OTP bên dưới:</p>
+              
+              <div style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); border-radius: 12px; padding: 25px; text-align: center; margin: 30px 0;">
+                <p style="color: white; margin: 0 0 10px 0; font-size: 14px;">MÃ OTP CỦA BẠN</p>
+                <p style="color: white; font-size: 42px; font-weight: bold; letter-spacing: 8px; margin: 0; font-family: 'Courier New', monospace;">${otp}</p>
+                <p style="color: #dbeafe; margin: 10px 0 0 0; font-size: 12px;">Có hiệu lực trong 3 phút</p>
+              </div>
+              
+              <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; border-radius: 4px; margin: 20px 0;">
+                <p style="color: #92400e; margin: 0 0 8px 0; font-size: 14px;"><strong>⏰ Thời gian gửi mã:</strong></p>
+                <p style="color: #92400e; margin: 0; font-size: 13px;">📅 ${formatTime(sentTime)}</p>
+                <p style="color: #92400e; margin: 8px 0 0 0; font-size: 14px;"><strong>⌛ Mã hết hạn lúc:</strong></p>
+                <p style="color: #92400e; margin: 0; font-size: 13px;">📅 ${formatTime(expiryTime)}</p>
+              </div>
+              
+              <div style="background-color: #f1f5f9; border-radius: 8px; padding: 20px; margin: 20px 0;">
+                <h3 style="color: #1e293b; margin: 0 0 15px 0; font-size: 16px;">📦 Chi tiết đơn hàng:</h3>
+                <pre style="color: #475569; margin: 0; white-space: pre-wrap; font-family: inherit; line-height: 1.8;">${itemsList || 'Không có thông tin'}</pre>
+                <div style="border-top: 2px solid #cbd5e1; margin-top: 15px; padding-top: 15px;">
+                  <p style="color: #1e293b; font-size: 18px; font-weight: bold; margin: 0;">Tổng thanh toán: ${((orderTotal || 0) / 100).toLocaleString()}₫</p>
+                </div>
+              </div>
+              
+              <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; border-radius: 4px; margin: 20px 0;">
+                <p style="color: #92400e; margin: 0; font-size: 14px;"><strong>⚠️ Lưu ý bảo mật:</strong> Không chia sẻ mã OTP này với bất kỳ ai, kể cả nhân viên GearUp.</p>
+              </div>
+              
+              <p style="color: #64748b; font-size: 13px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e2e8f0;">
+                Email này được gửi tự động. Vui lòng không trả lời.<br>
+                Nếu bạn không thực hiện đơn hàng này, vui lòng liên hệ: support@gearup.vn
+              </p>
             </div>
-            
-            <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; border-radius: 4px; margin: 20px 0;">
-              <p style="color: #92400e; margin: 0; font-size: 14px;"><strong>⚠️ Lưu ý bảo mật:</strong> Không chia sẻ mã OTP này với bất kỳ ai, kể cả nhân viên GearUp.</p>
-            </div>
-            
-            <p style="color: #64748b; font-size: 13px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e2e8f0;">
-              Email này được gửi tự động. Vui lòng không trả lời.<br>
-              Nếu bạn không thực hiện đơn hàng này, vui lòng liên hệ: support@gearup.vn
-            </p>
           </div>
-        </div>
-      `
-    });
-    console.log('COD OTP email sent successfully:', mailResult.messageId);
+        `
+      });
+      console.log('COD OTP email sent successfully:', mailResult.messageId);
+    } catch (emailError) {
+      // Log email error but don't fail the request - OTP is already stored
+      console.error('Failed to send COD OTP email (OTP still valid):', emailError.message);
+      if (emailError.response) {
+        console.error('   Email service response:', emailError.response.data);
+      }
+      // Continue - OTP is stored and can still be verified
+    }
 
     return res.json({ ok: true, message: 'OTP sent successfully' });
   } catch (e) {
@@ -1680,18 +1786,36 @@ app.post('/auth/verify-cod-otp', async (req, res) => {
       }
     }
     
-    // For guest users (userId is NULL), find OTP by email only
-    // For authenticated users, find by both user_id and email
-    let query, params;
-    if (userId) {
-      query = 'SELECT * FROM otp_codes WHERE user_id = ? AND email = ? AND code = ? AND type = ? AND expires_at > NOW()';
-      params = [userId, email, otp, 'COD'];
-    } else {
-      query = 'SELECT * FROM otp_codes WHERE user_id IS NULL AND email = ? AND code = ? AND type = ? AND expires_at > NOW()';
-      params = [email, otp, 'COD'];
+    // For guest users, try to find user_id from email first
+    if (!userId) {
+      try {
+        const [users] = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
+        if (users.length > 0) {
+          userId = users[0].id;
+          console.log(`Found user_id for guest: ${userId}`);
+        }
+      } catch (userError) {
+        console.warn('Could not find user for email:', userError.message);
+      }
     }
     
-    const [rows] = await pool.execute(query, params);
+    // Find OTP: try with user_id first, then fallback to NULL
+    let query, params;
+    let rows = [];
+    
+    if (userId) {
+      // Try with user_id
+      query = 'SELECT * FROM otp_codes WHERE user_id = ? AND email = ? AND code = ? AND type = ? AND expires_at > NOW()';
+      params = [userId, email, otp, 'COD'];
+      [rows] = await pool.execute(query, params);
+    }
+    
+    // If not found, try with NULL user_id (for cases where OTP was stored before user was created)
+    if (rows.length === 0) {
+      query = 'SELECT * FROM otp_codes WHERE user_id IS NULL AND email = ? AND code = ? AND type = ? AND expires_at > NOW()';
+      params = [email, otp, 'COD'];
+      [rows] = await pool.execute(query, params);
+    }
 
     console.log('OTP query result:', { found: rows.length, userId, email, otp });
 
@@ -1702,9 +1826,6 @@ app.post('/auth/verify-cod-otp', async (req, res) => {
     // Delete used OTP
     await pool.execute('DELETE FROM otp_codes WHERE id = ?', [rows[0].id]);
     
-    // ✅ Call order-service to confirm order and reserve inventory
-    // For guest users, orderId must be provided in request body
-    // For authenticated users, we can find order by userId (or use orderId if provided)
     try {
       const ORDER_SERVICE_URL = process.env.ORDER_SERVICE_URL || 'http://order-service:3004';
       
@@ -1734,7 +1855,7 @@ app.post('/auth/verify-cod-otp', async (req, res) => {
         
         // Check if order was cancelled due to out of stock
         if (errorData.error === 'OUT_OF_STOCK' && errorData.cancelled) {
-          console.error(`❌ COD order #${orderId} cancelled - Out of stock:`, errorData.message);
+          console.error(`COD order #${orderId} cancelled - Out of stock:`, errorData.message);
           return res.status(400).json({ 
             error: 'OUT_OF_STOCK',
             message: errorData.message || 'Sản phẩm đã hết hàng. Đơn hàng đã bị hủy.',
@@ -1750,7 +1871,7 @@ app.post('/auth/verify-cod-otp', async (req, res) => {
         });
       } else {
         const result = await orderResponse.json();
-        console.log('✅ COD order confirmed and stock reserved:', result);
+        console.log('COD order confirmed and stock reserved:', result);
       }
     } catch (orderErr) {
       console.error('Error calling order service:', orderErr.message);
@@ -2472,10 +2593,6 @@ app.post('/auth/send-order-confirmation', async (req, res) => {
   }
 });
 
-// ============================================
-// LOYALTY POINTS ENDPOINTS
-// ============================================
-
 // Add loyalty points (called by order-service after order confirmation)
 app.post('/auth/add-loyalty-points', async (req, res) => {
   try {
@@ -2843,13 +2960,13 @@ app.get('/health', async (req, res) => {
 Promise.all([
   lockManager.connect(),
   setupOrderEventHandlers().then(() => {
-    console.log('✅ Auth service event handlers ready');
+    console.log('Auth service event handlers ready');
   })
 ]).then(() => {
-  console.log('✅ Auth service Redis lock manager ready');
+  console.log('Auth service Redis lock manager ready');
 }).catch(err => {
-  console.error('❌ Redis connection failed:', err);
-  console.warn('⚠️ Service will run WITHOUT rate limiting and event handlers');
+  console.error('Redis connection failed:', err);
+  console.warn('Service will run WITHOUT rate limiting and event handlers');
 });
 
 app.listen(PORT, () => {

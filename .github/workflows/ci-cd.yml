@@ -105,13 +105,6 @@ jobs:
             npm install
           fi
         continue-on-error: true
-      
-      # Có thể thêm lint và test ở đây
-      # - name: Run linter
-      #   run: npm run lint
-      # 
-      # - name: Run tests
-      #   run: npm test
 
   # Job 2: Build Docker Images
   build:

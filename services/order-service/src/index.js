@@ -62,9 +62,9 @@ catalogBreaker.fallback(() => ({
   message: 'Dịch vụ sản phẩm tạm thời không khả dụng. Vui lòng thử lại sau.'
 }));
 
-catalogBreaker.on('open', () => console.log('🔴 Catalog Circuit Breaker OPEN'));
-catalogBreaker.on('halfOpen', () => console.log('🟡 Catalog Circuit Breaker HALF_OPEN'));
-catalogBreaker.on('close', () => console.log('🟢 Catalog Circuit Breaker CLOSED'));
+catalogBreaker.on('open', () => console.log('Catalog Circuit Breaker OPEN'));
+catalogBreaker.on('halfOpen', () => console.log('Catalog Circuit Breaker HALF_OPEN'));
+catalogBreaker.on('close', () => console.log('Catalog Circuit Breaker CLOSED'));
 
 // Circuit breaker for payment service
 const paymentBreaker = new CircuitBreaker(
@@ -85,9 +85,9 @@ paymentBreaker.fallback(() => ({
   message: 'Dịch vụ thanh toán tạm thời không khả dụng. Vui lòng thử lại sau.'
 }));
 
-paymentBreaker.on('open', () => console.log('🔴 Payment Circuit Breaker OPEN'));
-paymentBreaker.on('halfOpen', () => console.log('🟡 Payment Circuit Breaker HALF_OPEN'));
-paymentBreaker.on('close', () => console.log('🟢 Payment Circuit Breaker CLOSED'));
+paymentBreaker.on('open', () => console.log('Payment Circuit Breaker OPEN'));
+paymentBreaker.on('halfOpen', () => console.log('Payment Circuit Breaker HALF_OPEN'));
+paymentBreaker.on('close', () => console.log('Payment Circuit Breaker CLOSED'));
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
@@ -228,20 +228,20 @@ async function ensureUserForGuest(shipping) {
     addressDetail: shipping.address || null
   };
 
-  console.log('🔵 Calling ensure-guest with payload:', JSON.stringify(payload, null, 2));
+  console.log('Calling ensure-guest with payload:', JSON.stringify(payload, null, 2));
   
   try {
     const response = await httpClient.post(`${AUTH_SERVICE_URL}/auth/ensure-guest`, payload);
-    console.log('🔵 ensure-guest response:', JSON.stringify(response.data, null, 2));
+    console.log('ensure-guest response:', JSON.stringify(response.data, null, 2));
     
     if (!response.data || !response.data.id) {
       throw new Error('Failed to ensure guest account: No user ID returned');
     }
     return response.data.id;
   } catch (error) {
-    console.error('❌ ensure-guest API error:', error.message);
-    console.error('   Response status:', error.response?.status);
-    console.error('   Response data:', error.response?.data);
+    console.error('ensure-guest API error:', error.message);
+    console.error('Response status:', error.response?.status);
+    console.error('Response data:', error.response?.data);
     throw new Error(`Failed to ensure guest account: ${error.message}`);
   }
 }
@@ -253,8 +253,7 @@ async function recordStatusHistory(orderId, oldStatus, newStatus, changedBy = 'S
       'INSERT INTO order_status_history (order_id, old_status, new_status, changed_by, notes) VALUES (?, ?, ?, ?, ?)',
       [orderId, oldStatus, newStatus, changedBy, notes]
     );
-    
-    // 📤 Publish order.status_changed event
+
     try {
       await eventBus.publish('order.status_changed', {
         orderId,
@@ -264,7 +263,7 @@ async function recordStatusHistory(orderId, oldStatus, newStatus, changedBy = 'S
         notes,
         timestamp: new Date().toISOString()
       });
-      console.log(`📤 Published order.status_changed event for order #${orderId}: ${oldStatus} → ${newStatus}`);
+      console.log(`Published order.status_changed event for order #${orderId}: ${oldStatus} → ${newStatus}`);
     } catch (error) {
       console.error('Failed to publish order.status_changed event:', error.message);
       // Non-critical, don't fail the operation
@@ -279,7 +278,7 @@ async function recordStatusHistory(orderId, oldStatus, newStatus, changedBy = 'S
 async function sendOrderConfirmationEmail(orderId, orderData) {
   try {
     if (!orderData.shipping_email) {
-      console.log(`⚠️ No email for order #${orderId}, skipping confirmation email`);
+      console.log(`No email for order #${orderId}, skipping confirmation email`);
       return;
     }
 
@@ -288,30 +287,25 @@ async function sendOrderConfirmationEmail(orderId, orderData) {
       email: orderData.shipping_email,
       orderData
     });
-    console.log(`✅ Confirmation email sent for order #${orderId}`);
+    console.log(`Confirmation email sent for order #${orderId}`);
   } catch (error) {
     // Log error but don't fail the main operation
     console.error(`Failed to send confirmation email for order #${orderId}:`, error.message);
   }
 }
 
-// Helper: Calculate and add loyalty points (10% of order total)
-// Example: 1,000,000 VND = 100 points = 100,000 VND value
 async function addLoyaltyPoints(userId, orderId, orderTotalCents) {
   try {
     if (!userId) {
-      console.log(`⚠️ No userId for order #${orderId}, skipping loyalty points`);
+      console.log(`No userId for order #${orderId}, skipping loyalty points`);
       return;
     }
 
     // Calculate points: 10% of order total
-    // 1 point = 1,000 VND
-    // Example: 1,000,000 VND → 10% = 100,000 VND = 100 points
-    // Note: orderTotalCents is in VND (despite the name), not actual cents
     const pointsEarned = Math.floor((orderTotalCents * 0.1) / 1000); // 10% of total, then convert to points (1 point = 1,000 VND)
     
     if (pointsEarned <= 0) {
-      console.log(`ℹ️ No points to add for order #${orderId} (total: ${orderTotalCents} VND)`);
+      console.log(`No points to add for order #${orderId} (total: ${orderTotalCents} VND)`);
       return;
     }
 
@@ -323,7 +317,7 @@ async function addLoyaltyPoints(userId, orderId, orderTotalCents) {
         points: pointsEarned,
         description: `Tích lũy từ đơn hàng #${orderId}`
       });
-      console.log(`✅ Added ${pointsEarned} loyalty points to user ${userId} for order #${orderId}`);
+      console.log(`Added ${pointsEarned} loyalty points to user ${userId} for order #${orderId}`);
     } catch (error) {
       console.error(`Failed to add loyalty points:`, error.message);
     }
@@ -366,8 +360,8 @@ app.post('/orders/checkout', async (req, res) => {
   // If not authenticated, auto-create or reuse an account based on email
   if (!userId) {
     try {
-      console.log('🔵 Creating guest account for:', shipping.email);
-      console.log('   Shipping data:', JSON.stringify(shipping, null, 2));
+      console.log('Creating guest account for:', shipping.email);
+      console.log('Shipping data:', JSON.stringify(shipping, null, 2));
       
       // Ensure shipping object has all required fields for ensureUserForGuest
       const guestShippingData = {
@@ -379,15 +373,15 @@ app.post('/orders/checkout', async (req, res) => {
         address: shipping.address || null
       };
       
-      console.log('   Guest shipping data:', JSON.stringify(guestShippingData, null, 2));
+      console.log('Guest shipping data:', JSON.stringify(guestShippingData, null, 2));
       
       userId = await ensureUserForGuest(guestShippingData);
-      console.log('✅ Guest account created/reused, userId:', userId);
+      console.log('Guest account created/reused, userId:', userId);
     } catch (err) {
-      console.error('❌ ensureUserForGuest error:', err);
-      console.error('   Error message:', err.message);
-      console.error('   Error response:', err.response?.data);
-      console.error('   Error stack:', err.stack);
+      console.error('ensureUserForGuest error:', err);
+      console.error('Error message:', err.message);
+      console.error('Error response:', err.response?.data);
+      console.error('Error stack:', err.stack);
       return res.status(500).json({ 
         error: 'GUEST_ACCOUNT_ERROR',
         message: 'Không thể tạo tài khoản cho khách. Vui lòng thử lại hoặc đăng nhập.',
@@ -396,11 +390,10 @@ app.post('/orders/checkout', async (req, res) => {
     }
   }
   
-  // 🔒 CRITICAL: Prevent duplicate orders from multiple clicks
   // Lock by userId to ensure only one order creation at a time per user
   const orderLockKey = `order:create:${userId}`;
   
-  console.log('🔵 Starting checkout process:', {
+  console.log('Starting checkout process:', {
     userId,
     itemCount: items.length,
     paymentMethod,
@@ -410,12 +403,12 @@ app.post('/orders/checkout', async (req, res) => {
   
   try {
     const result = await lockManager.withLock(orderLockKey, async () => {
-      console.log('🔵 Processing checkout inside lock...');
+      console.log('Processing checkout inside lock...');
       return await processCheckout(userId, items, shipping, paymentMethod, couponCode, pointsToUse, pool, res);
     }, { ttlSeconds: 30, maxRetries: 1, throwOnFailure: false });
     
     if (!result) {
-      console.error('❌ Checkout returned null/undefined');
+      console.error('Checkout returned null/undefined');
       return res.status(500).json({ 
         error: 'CHECKOUT_FAILED',
         message: 'Không thể tạo đơn hàng. Vui lòng thử lại.'
@@ -424,9 +417,9 @@ app.post('/orders/checkout', async (req, res) => {
     
     return result;
   } catch (error) {
-    console.error('❌ Order creation error:', error);
-    console.error('   Error message:', error.message);
-    console.error('   Error stack:', error.stack);
+    console.error('Order creation error:', error);
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
     
     // If it's a lock error, return 429
     if (error.message && error.message.includes('lock')) {
@@ -451,13 +444,12 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
   // Note: Variable names use "*Cents" suffix but values are actually in VND (not cents)
   // This is a legacy naming convention - all monetary values in this service are in VND
   const shippingFeeCents = 30000; // 30,000 VND (not 30,000 cents)
-  const subtotalCents = items.reduce((sum, it) => sum + (it.priceCents * it.quantity), 0); // All in VND
-  let discountCents = 0; // In VND
+  const subtotalCents = items.reduce((sum, it) => sum + (it.priceCents * it.quantity), 0);
+  let discountCents = 0; 
   let appliedCoupon = null;
-  let pointsDiscountCents = 0; // Discount from loyalty points (in VND)
-  let pointsUsed = 0; // Points actually used
+  let pointsDiscountCents = 0;
+  let pointsUsed = 0;
   
-  // 🔒 CRITICAL: Coupon lock with SELECT FOR UPDATE to prevent over-usage
   if (couponCode) {
     const conn = await pool.getConnection();
     try {
@@ -537,10 +529,10 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
           console.error('Release error:', releaseErr);
         }
       }
-      console.error('❌ Coupon validation error:', e);
-      console.error('   Error message:', e.message);
-      console.error('   Error code:', e.code);
-      console.error('   Error stack:', e.stack);
+      console.error('Coupon validation error:', e);
+      console.error('Error message:', e.message);
+      console.error('Error code:', e.code);
+      console.error('Error stack:', e.stack);
       return res.status(500).json({ 
         error: 'COUPON_ERROR', 
         details: ['Lỗi xử lý mã giảm giá'],
@@ -562,7 +554,7 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
       if (pointsResponse.data && pointsResponse.data.ok) {
         pointsDiscountCents = pointsResponse.data.discountAmount || 0; // In VND
         pointsUsed = pointsResponse.data.pointsUsed || 0;
-        console.log(`✅ Used ${pointsUsed} points (${pointsDiscountCents} VND discount) for user ${userId}`);
+        console.log(`Used ${pointsUsed} points (${pointsDiscountCents} VND discount) for user ${userId}`);
       }
     } catch (error) {
       console.error('Failed to use loyalty points:', error.response?.data || error.message);
@@ -578,7 +570,7 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
   // Note: For freeship coupon, discountCents = shippingFeeCents, so shipping is effectively free
   const totalCents = subtotalCents + shippingFeeCents - discountCents - pointsDiscountCents; // All values in VND
   
-  console.log('💰 Order calculation:', {
+  console.log('Order calculation:', {
     subtotalCents,
     shippingFeeCents,
     discountCents,
@@ -603,12 +595,11 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
   try {
     await conn.beginTransaction();
     
-    // 🔒 STOCK LOGIC theo payment method:
+    // STOCK LOGIC theo payment method:
     // - VNPay: Chỉ CHECK stock khi checkout, trừ sau khi thanh toán thành công
     // - COD: Chỉ CHECK stock khi checkout, trừ sau khi xác nhận OTP
     // Stock chỉ được trừ khi thanh toán xong, không trừ khi thêm vào giỏ hàng
     
-    // ✅ Check stock availability for all items BEFORE creating order
     // This ensures customer cannot checkout if cart quantity exceeds available stock
     const stockErrors = [];
     for (const item of items) {
@@ -631,7 +622,7 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
         const availableStock = product.stock !== undefined ? (product.stock || 0) : 0;
         const requestedQuantity = item.quantity || 0;
         
-        console.log(`🔍 Stock check for product #${item.productId} (${product.name || 'N/A'}): available=${availableStock}, requested=${requestedQuantity}`);
+        console.log(`Stock check for product #${item.productId} (${product.name || 'N/A'}): available=${availableStock}, requested=${requestedQuantity}`);
         
         if (availableStock < requestedQuantity) {
           stockErrors.push(
@@ -640,8 +631,8 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
           );
         }
       } catch (productError) {
-        console.error(`❌ Error checking stock for product ${item.productId}:`, productError.message);
-        console.error('   Error stack:', productError.stack);
+        console.error(`Error checking stock for product ${item.productId}:`, productError.message);
+        console.error('Error stack:', productError.stack);
         stockErrors.push(`Không thể kiểm tra tồn kho cho sản phẩm #${item.productId}`);
       }
     }
@@ -650,7 +641,7 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
     if (stockErrors.length > 0) {
       await conn.rollback();
       conn.release();
-      console.log(`❌ Checkout blocked - Stock errors:`, stockErrors);
+      console.log(`Checkout blocked - Stock errors:`, stockErrors);
       return res.status(400).json({
         error: 'OUT_OF_STOCK',
         message: 'Một số sản phẩm trong giỏ hàng không đủ số lượng',
@@ -658,9 +649,9 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
       });
     }
     
-    console.log(`✅ All stock checks passed for ${items.length} items`);
+    console.log(`All stock checks passed for ${items.length} items`);
     
-    console.log(`✅ Stock availability checked for ${paymentMethod} order (user ${userId}) - stock will be deducted after payment confirmation`);
+    console.log(`Stock availability checked for ${paymentMethod} order (user ${userId}) - stock will be deducted after payment confirmation`);
     
     // Fetch product details for order_items using circuit breaker
     const productDetails = await Promise.all(
@@ -696,7 +687,7 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
     const shippingEmail = (shipping.email || '').toString();
     const couponCodeValue = appliedCoupon ? (appliedCoupon.normalizedCode || appliedCoupon.code || '').toString() : null;
     
-    console.log('📝 Inserting order with values:', {
+    console.log('Inserting order with values:', {
       userId,
       totalCents,
       discountCents,
@@ -747,7 +738,6 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
     
     await conn.commit();
     
-    // 📤 Publish order.created event
     try {
       await eventBus.publish('order.created', {
         orderId,
@@ -764,7 +754,7 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
         })),
         createdAt: new Date().toISOString()
       });
-      console.log(`📤 Published order.created event for order #${orderId}`);
+      console.log(`Published order.created event for order #${orderId}`);
     } catch (error) {
       console.error('Failed to publish order.created event:', error.message);
       // Non-critical, don't fail the order
@@ -801,17 +791,17 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
       try {
         await conn.rollback();
       } catch (rollbackErr) {
-        console.error('❌ Rollback error:', rollbackErr);
+        console.error('Rollback error:', rollbackErr);
       }
     }
     
-    console.error('❌ Checkout error:', e);
-    console.error('   Error name:', e.name);
-    console.error('   Error message:', e.message);
-    console.error('   Error code:', e.code);
-    console.error('   Error sqlState:', e.sqlState);
-    console.error('   Error sqlMessage:', e.sqlMessage);
-    console.error('   Error stack:', e.stack);
+    console.error('Checkout error:', e);
+    console.error('Error name:', e.name);
+    console.error('Error message:', e.message);
+    console.error('Error code:', e.code);
+    console.error('Error sqlState:', e.sqlState);
+    console.error('Error sqlMessage:', e.sqlMessage);
+    console.error('Error stack:', e.stack);
     
     // Check for specific database errors
     if (e.code === 'ER_DUP_ENTRY') {
@@ -853,7 +843,7 @@ async function processCheckout(userId, items, shipping, paymentMethod, couponCod
       try {
         conn.release();
       } catch (releaseErr) {
-        console.error('❌ Connection release error:', releaseErr);
+        console.error('Connection release error:', releaseErr);
       }
     }
   }
@@ -1145,37 +1135,35 @@ app.patch('/admin/orders/:orderId/status', async (req, res) => {
     const allowed = ['PENDING', 'CONFIRMED', 'SHIPPING', 'DELIVERED', 'CANCELLED'];
     if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid status' });
     
-    // Get current order status and items
-    const [[currentOrder]] = await pool.query('SELECT status FROM orders WHERE id = ?', [orderId]);
+    // Get current order status, payment method and items
+    const [[currentOrder]] = await pool.query('SELECT status, payment_method FROM orders WHERE id = ?', [orderId]);
     if (!currentOrder) return res.status(404).json({ error: 'Order not found' });
     
     const oldStatus = currentOrder.status;
+    const paymentMethod = currentOrder.payment_method;
     const [items] = await pool.query('SELECT product_id, quantity FROM order_items WHERE order_id = ?', [orderId]);
     
-    // ⚠️ Stock changes handled by payment confirmation endpoints:
-    // - COD: /orders/confirm-cod (after OTP verification)
-    // - VNPay: /orders/confirm-vnpay (after payment callback)
-    //
-    // Admin status update logic:
-    // 1. ANY_STATUS → CANCELLED: PHẢI restore stock (vì stock đã trừ ngay khi checkout)
-    // 2. DELIVERED → CANCELLED: Không cho phép (đã giao hàng thành công)
-    
-    // Prevent cancelling delivered orders
-    if (status === 'CANCELLED' && currentOrder.status === 'DELIVERED') {
+    // Prevent invalid transitions
+    // 1. DELIVERED → CANCELLED: Không cho phép (đã giao hàng thành công)
+    if (status === 'CANCELLED' && oldStatus === 'DELIVERED') {
       return res.status(400).json({ 
         error: 'CANNOT_CANCEL_DELIVERED',
         message: 'Không thể hủy đơn hàng đã giao thành công' 
       });
     }
     
-    // ✅ RESTORE STOCK khi admin cancel:
-    // - VNPay: Restore cho TẤT CẢ status (PENDING/CONFIRMED/SHIPPING) vì đã trừ khi tạo
-    // - COD PENDING: Không restore (chưa trừ)
-    // - COD CONFIRMED/SHIPPING: Restore (đã trừ sau OTP)
-    if (status === 'CANCELLED') {
-      const needRestore = (currentOrder.payment_method === 'VNPAY') || 
-                          (currentOrder.payment_method === 'COD' && 
-                           (currentOrder.status === 'CONFIRMED' || currentOrder.status === 'SHIPPING'));
+    // 2. CANCELLED → DELIVERED: Không cho phép (đơn đã bị hủy)
+    if (status === 'DELIVERED' && oldStatus === 'CANCELLED') {
+      return res.status(400).json({ 
+        error: 'CANNOT_DELIVER_CANCELLED',
+        message: 'Không thể giao đơn hàng đã bị hủy' 
+      });
+    }
+    
+    if (status === 'CANCELLED' && oldStatus !== 'CANCELLED') {
+      const needRestore = (paymentMethod === 'VNPAY') || 
+                          (paymentMethod === 'COD' && 
+                           (oldStatus === 'CONFIRMED' || oldStatus === 'SHIPPING' || oldStatus === 'DELIVERED'));
       
       if (needRestore && items.length > 0) {
         try {
@@ -1186,7 +1174,7 @@ app.patch('/admin/orders/:orderId/status', async (req, res) => {
           await httpClient.post(`${CATALOG_SERVICE_URL}/catalog/inventory/release`, {
             items: releaseItems
           });
-          console.log(`✅ Admin cancelled ${currentOrder.payment_method} ${currentOrder.status} order #${orderId} - Restored ${items.length} products`);
+          console.log(`Admin cancelled ${paymentMethod} ${oldStatus} order #${orderId} - Restored ${items.length} products`);
         } catch (e) {
           console.error(`Failed to restore stock:`, e.message);
           return res.status(500).json({ 
@@ -1195,7 +1183,41 @@ app.patch('/admin/orders/:orderId/status', async (req, res) => {
           });
         }
       } else {
-        console.log(`ℹ️ Admin cancelled ${currentOrder.payment_method} ${currentOrder.status} order #${orderId} - No stock to restore`);
+        console.log(`Admin cancelled ${paymentMethod} ${oldStatus} order #${orderId} - No stock to restore`);
+      }
+    }
+
+    if (oldStatus === 'CANCELLED' && status !== 'CANCELLED') {
+      const needReserve = (paymentMethod === 'VNPAY') || 
+                         (paymentMethod === 'COD' && (status === 'CONFIRMED' || status === 'SHIPPING' || status === 'DELIVERED'));
+      
+      if (needReserve && items.length > 0) {
+        try {
+          const reserveItems = items.map(item => ({ 
+            productId: item.product_id, 
+            quantity: item.quantity 
+          }));
+          const reserveResult = await httpClient.post(`${CATALOG_SERVICE_URL}/catalog/inventory/reserve`, {
+            items: reserveItems
+          });
+          
+          // Check if reservation was successful
+          if (reserveResult.data && reserveResult.data.failed && reserveResult.data.failed.length > 0) {
+            const failedItems = reserveResult.data.failed.map(f => f.productId).join(', ');
+            return res.status(400).json({ 
+              error: 'STOCK_INSUFFICIENT',
+              message: `Không đủ hàng cho sản phẩm: ${failedItems}` 
+            });
+          }
+          
+          console.log(`Admin restored ${paymentMethod} order #${orderId} from CANCELLED to ${status} - Reserved ${items.length} products`);
+        } catch (e) {
+          console.error(`Failed to reserve stock:`, e.message);
+          return res.status(500).json({ 
+            error: 'STOCK_RESERVE_FAILED',
+            message: 'Không thể reserve stock. Vui lòng thử lại.' 
+          });
+        }
       }
     }
     
@@ -1262,12 +1284,11 @@ app.post('/orders/confirm-cod', async (req, res) => {
     return res.status(500).json({ error: 'Server error' });
   }
   
-  // 🔒 CRITICAL: Lock order để prevent race condition khi 2 users confirm cùng lúc
   const lockKey = `order:confirm:${orderId}`;
   const lockToken = await lockManager.acquireLock(lockKey, 10000);
   
   if (!lockToken) {
-    console.log(`⏳ Order #${orderId} is being processed by another request`);
+    console.log(`Order #${orderId} is being processed by another request`);
     return res.status(409).json({ error: 'Order is being processed' });
   }
   
@@ -1279,7 +1300,7 @@ app.post('/orders/confirm-cod', async (req, res) => {
     );
     
     if (!currentOrder || currentOrder.status !== 'PENDING') {
-      console.log(`⚠️ Order #${orderId} already processed (status: ${currentOrder?.status})`);
+      console.log(`Order #${orderId} already processed (status: ${currentOrder?.status})`);
       await lockManager.releaseLock(lockKey, lockToken);
       return res.status(400).json({ 
         error: 'Order already processed',
@@ -1315,7 +1336,6 @@ app.post('/orders/confirm-cod', async (req, res) => {
           // Record status change in history
           await recordStatusHistory(orderId, 'PENDING', 'CANCELLED', 'SYSTEM', 'Hủy đơn do hết hàng sau khi xác nhận COD');
           
-          // 📤 Publish order.status_changed event
           try {
             await eventBus.publish('order.status_changed', {
               orderId,
@@ -1330,7 +1350,7 @@ app.post('/orders/confirm-cod', async (req, res) => {
           }
           
           await lockManager.releaseLock(lockKey, lockToken);
-          console.log(`❌ COD order #${orderId} cancelled - Out of stock after confirmation`);
+          console.log(`COD order #${orderId} cancelled - Out of stock after confirmation`);
           return res.status(400).json({ 
             error: 'OUT_OF_STOCK',
             message: 'Sản phẩm đã hết hàng. Đơn hàng đã bị hủy.',
@@ -1339,7 +1359,7 @@ app.post('/orders/confirm-cod', async (req, res) => {
           });
         }
         
-        console.log(`✅ Reserved inventory for COD order #${orderId}`);
+        console.log(`Reserved inventory for COD order #${orderId}`);
       } catch (inventoryError) {
         console.error('Failed to reserve inventory:', inventoryError.message);
         await pool.query('UPDATE orders SET status = ? WHERE id = ?', ['CANCELLED', orderId]);
@@ -1357,7 +1377,6 @@ app.post('/orders/confirm-cod', async (req, res) => {
     // Record status change in history (will publish order.status_changed event)
     await recordStatusHistory(orderId, 'PENDING', 'CONFIRMED', 'SYSTEM', 'Xác nhận thanh toán COD thành công');
     
-    // 📤 Publish order.payment_completed event
     try {
       await eventBus.publish('order.payment_completed', {
         orderId,
@@ -1368,7 +1387,7 @@ app.post('/orders/confirm-cod', async (req, res) => {
         totalCents: fullOrder?.total_cents || 0,
         timestamp: new Date().toISOString()
       });
-      console.log(`📤 Published order.payment_completed event for COD order #${orderId}`);
+      console.log(`Published order.payment_completed event for COD order #${orderId}`);
     } catch (error) {
       console.error('Failed to publish order.payment_completed event:', error.message);
       // Non-critical
@@ -1398,7 +1417,7 @@ app.post('/orders/confirm-cod', async (req, res) => {
       );
     }
     
-    console.log(`✅ COD order #${orderId} confirmed and stock reserved`);
+    console.log(`COD order #${orderId} confirmed and stock reserved`);
     await lockManager.releaseLock(lockKey, lockToken);
     return res.json({ ok: true, orderId });
     
@@ -1416,12 +1435,11 @@ app.post('/orders/confirm-vnpay', async (req, res) => {
     return res.status(400).json({ error: 'Missing orderId' });
   }
   
-  // 🔒 CRITICAL: Lock order để prevent duplicate IPN processing
   const lockKey = `order:confirm:${orderId}`;
   const lockToken = await lockManager.acquireLock(lockKey, 10000);
   
   if (!lockToken) {
-    console.log(`⏳ Order #${orderId} is being processed by another request`);
+    console.log(`Order #${orderId} is being processed by another request`);
     return res.status(409).json({ error: 'Order is being processed' });
   }
   
@@ -1439,7 +1457,7 @@ app.post('/orders/confirm-vnpay', async (req, res) => {
     
     // Only process if order is still PENDING
     if (order.status !== 'PENDING') {
-      console.log(`⚠️ Order #${orderId} already processed (status: ${order.status})`);
+      console.log(`Order #${orderId} already processed (status: ${order.status})`);
       await lockManager.releaseLock(lockKey, lockToken);
       return res.json({ ok: true, message: 'Order already processed' });
     }
@@ -1472,7 +1490,7 @@ app.post('/orders/confirm-vnpay', async (req, res) => {
           // Record status change in history
           await recordStatusHistory(orderId, 'PENDING', 'CANCELLED', 'SYSTEM', 'Hủy đơn do hết hàng sau khi thanh toán VNPay thành công');
           
-          // 📤 Publish order.status_changed event
+          // Publish order.status_changed event
           try {
             await eventBus.publish('order.status_changed', {
               orderId,
@@ -1487,7 +1505,7 @@ app.post('/orders/confirm-vnpay', async (req, res) => {
           }
           
           await lockManager.releaseLock(lockKey, lockToken);
-          console.log(`❌ VNPay order #${orderId} cancelled - Out of stock after payment`);
+          console.log(`VNPay order #${orderId} cancelled - Out of stock after payment`);
           return res.status(400).json({ 
             error: 'OUT_OF_STOCK',
             message: 'Sản phẩm đã hết hàng. Đơn hàng đã bị hủy và sẽ được hoàn tiền.',
@@ -1496,7 +1514,7 @@ app.post('/orders/confirm-vnpay', async (req, res) => {
           });
         }
         
-        console.log(`✅ Reserved inventory for VNPay order #${orderId}`);
+        console.log(`Reserved inventory for VNPay order #${orderId}`);
       } catch (inventoryError) {
         console.error('Failed to reserve inventory:', inventoryError.message);
         await pool.query('UPDATE orders SET status = ? WHERE id = ?', ['CANCELLED', orderId]);
@@ -1525,7 +1543,6 @@ app.post('/orders/confirm-vnpay', async (req, res) => {
     // Record status change in history (will publish order.status_changed event)
     await recordStatusHistory(orderId, 'PENDING', 'CONFIRMED', 'SYSTEM', `Thanh toán VNPay thành công (TxnNo: ${transactionNo || 'N/A'})`);
     
-    // 📤 Publish order.payment_completed event
     try {
       await eventBus.publish('order.payment_completed', {
         orderId,
@@ -1539,7 +1556,7 @@ app.post('/orders/confirm-vnpay', async (req, res) => {
         totalCents: fullOrder?.total_cents || 0,
         timestamp: new Date().toISOString()
       });
-      console.log(`📤 Published order.payment_completed event for VNPay order #${orderId}`);
+      console.log(`Published order.payment_completed event for VNPay order #${orderId}`);
     } catch (error) {
       console.error('Failed to publish order.payment_completed event:', error.message);
       // Non-critical
@@ -1558,7 +1575,7 @@ app.post('/orders/confirm-vnpay', async (req, res) => {
       console.error('Loyalty points error (non-blocking):', err.message)
     );
     
-    console.log(`✅ VNPay order #${orderId} confirmed (TxnNo: ${transactionNo})`);
+    console.log(`VNPay order #${orderId} confirmed (TxnNo: ${transactionNo})`);
     await lockManager.releaseLock(lockKey, lockToken);
     return res.json({ ok: true, orderId });
     
@@ -1574,16 +1591,12 @@ app.post('/orders/:orderId/cancel-vnpay', async (req, res) => {
   try {
     const { orderId } = req.params;
     
-    console.log(`🔍 Attempting to cancel VNPay order #${orderId}`);
+    console.log(`Attempting to cancel VNPay order #${orderId}`);
     
     // Get current status before cancelling
     const [[currentOrder]] = await pool.query('SELECT status FROM orders WHERE id = ?', [orderId]);
     const oldStatus = currentOrder?.status || 'PENDING';
     
-    // ✅ RESTORE STOCK:
-    // Stock chỉ được trừ khi thanh toán thành công (confirm VNPay)
-    // - PENDING: Không restore (chưa trừ stock - chỉ check khi checkout)
-    // - CONFIRMED: Phải restore (đã trừ khi confirm VNPay)
     const needRestore = currentOrder?.status === 'CONFIRMED';
     
     if (needRestore) {
@@ -1593,7 +1606,7 @@ app.post('/orders/:orderId/cancel-vnpay', async (req, res) => {
         [orderId]
       );
       
-      console.log(`📦 Found ${items.length} items to restore for order #${orderId}:`, items);
+      console.log(`Found ${items.length} items to restore for order #${orderId}:`, items);
       
       // Restore stock if any items exist
       if (items.length > 0) {
@@ -1605,24 +1618,23 @@ app.post('/orders/:orderId/cancel-vnpay', async (req, res) => {
             }))
           };
           
-          console.log(`🔄 Calling catalog-service to release stock:`, releasePayload);
+          console.log(`Calling catalog-service to release stock:`, releasePayload);
           
           const releaseResponse = await httpClient.post(
             `${CATALOG_SERVICE_URL}/catalog/inventory/release`,
             releasePayload
           );
           
-          console.log(`✅ Stock restored for cancelled VNPay order #${orderId}`, releaseResponse.data);
+          console.log(`Stock restored for cancelled VNPay order #${orderId}`, releaseResponse.data);
         } catch (releaseError) {
-          console.error(`❌ Failed to restore stock for order #${orderId}:`, releaseError.message);
+          console.error(`Failed to restore stock for order #${orderId}:`, releaseError.message);
           if (releaseError.response) {
             console.error(`Response status: ${releaseError.response.status}`, releaseError.response.data);
           }
-          // Continue with cancellation even if stock restoration fails
         }
       }
     } else {
-      console.log(`ℹ️ VNPay order #${orderId} is ${oldStatus} - No stock to restore (stock not deducted yet)`);
+      console.log(`VNPay order #${orderId} is ${oldStatus} - No stock to restore (stock not deducted yet)`);
     }
     
     // Update order status to CANCELLED
@@ -1634,7 +1646,7 @@ app.post('/orders/:orderId/cancel-vnpay', async (req, res) => {
     // Record status change in history
     await recordStatusHistory(orderId, oldStatus, 'CANCELLED', 'SYSTEM', 'Hủy đơn do thanh toán VNPay thất bại');
     
-    console.log(`❌ VNPay order #${orderId} cancelled due to payment failure`);
+    console.log(`VNPay order #${orderId} cancelled due to payment failure`);
     return res.json({ ok: true });
     
   } catch (error) {
@@ -1678,13 +1690,6 @@ app.patch('/orders/:orderId/cancel', async (req, res) => {
     
     const oldStatus = order.status;
     
-    // ✅ RESTORE STOCK:
-    // Stock chỉ được trừ khi thanh toán thành công (confirm):
-    // - VNPay PENDING: Không restore (chưa trừ stock - chỉ check khi checkout)
-    // - VNPay CONFIRMED: Phải restore (đã trừ khi confirm VNPay)
-    // - COD PENDING: Không restore (chưa trừ stock - chỉ check khi checkout)
-    // - COD CONFIRMED: Phải restore (đã trừ khi confirm COD)
-    // Chỉ restore stock nếu order đã CONFIRMED (đã trừ stock rồi)
     const needRestore = order.status === 'CONFIRMED';
     
     if (needRestore) {
@@ -1701,16 +1706,16 @@ app.patch('/orders/:orderId/cancel', async (req, res) => {
           });
           
           if (!releaseResponse.data || !releaseResponse.data.success) {
-            console.error(`❌ Stock release returned failure for order #${orderId}`);
+            console.error(`Stock release returned failure for order #${orderId}`);
             return res.status(500).json({ 
               error: 'STOCK_RESTORE_FAILED',
               message: 'Không thể hoàn lại stock. Vui lòng thử lại hoặc liên hệ hỗ trợ.' 
             });
           }
           
-          console.log(`✅ User cancelled ${order.payment_method} ${order.status} order #${orderId} - Restored ${items.length} products`);
+          console.log(`User cancelled ${order.payment_method} ${order.status} order #${orderId} - Restored ${items.length} products`);
         } catch (e) {
-          console.error(`❌ Failed to restore stock for order #${orderId}:`, e.message);
+          console.error(`Failed to restore stock for order #${orderId}:`, e.message);
           return res.status(500).json({ 
             error: 'STOCK_RESTORE_FAILED',
             message: 'Không thể hoàn lại stock. Vui lòng thử lại hoặc liên hệ hỗ trợ.' 
@@ -1718,7 +1723,7 @@ app.patch('/orders/:orderId/cancel', async (req, res) => {
         }
       }
     } else {
-      console.log(`ℹ️ User cancelled ${order.payment_method} ${order.status} order #${orderId} - No stock to restore`);
+      console.log(`User cancelled ${order.payment_method} ${order.status} order #${orderId} - No stock to restore`);
     }
     
     // Update status to CANCELLED (keep payment_status as is: PENDING or FAILED)
@@ -1978,15 +1983,14 @@ Promise.all([
   lockManager.connect(),
   eventBus.connect()
 ]).then(() => {
-  console.log('✅ Order service Redis lock manager ready');
-  console.log('✅ Order service Redis event bus ready');
+  console.log('Order service Redis lock manager ready');
+  console.log('Order service Redis event bus ready');
 }).catch(err => {
-  console.error('❌ Redis connection failed:', err);
-  console.warn('⚠️ Service will run WITHOUT distributed locks and event bus');
+  console.error('Redis connection failed:', err);
+  console.warn('Service will run WITHOUT distributed locks and event bus');
 });
 
 app.listen(PORT, () => {
-  // eslint-disable-next-line no-console
   console.log(`Order service listening on ${PORT}`);
 });
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Box,
   Chip,
@@ -30,7 +30,7 @@ import {
   TableContainer,
   Tooltip,
 } from '@mui/material';
-import { Search, Visibility, Close, DeleteOutline, FileDownload, ArrowUpward, ArrowDownward } from '@mui/icons-material';
+import { Search, Visibility, Close, DeleteOutline, FileDownload } from '@mui/icons-material';
 import { useAuth } from '../state/AuthContext.jsx';
 import { exportToExcel, formatOrdersForExport } from '../utils/exportExcel';
 
@@ -96,9 +96,9 @@ export default function OrdersPage() {
       if (page === 1) {
         load();
       } else {
-        setPage(1); // Reset to page 1 when search changes
+        setPage(1);
       }
-    }, 500); // 500ms debounce
+    }, 500);
     
     return () => clearTimeout(timer);
   }, [search]);
@@ -107,7 +107,6 @@ export default function OrdersPage() {
     try {
       await api.patch(`/admin/orders/${id}/status`, { status });
       await load();
-      // Trigger dashboard refresh if status changed to DELIVERED
       if (status === 'DELIVERED') {
         localStorage.setItem('dashboard_refresh', Date.now().toString());
       }
@@ -243,7 +242,6 @@ export default function OrdersPage() {
     }
   };
 
-  // Note: Filtering is now done on backend, but we keep this for status counts
   // Status counts need to be fetched separately or calculated from all orders
   const statusCounts = {
     ALL: total,
@@ -486,10 +484,15 @@ export default function OrdersPage() {
                           size="small"
                           value={o.status}
                           onChange={(e) => updateStatus(o.id, e.target.value)}
+                          disabled={o.status === 'DELIVERED' || o.status === 'CANCELLED'}
                           sx={{ 
                             minWidth: 150,
                             '& .MuiSelect-select': {
                               py: 1
+                            },
+                            '&.Mui-disabled': {
+                              opacity: 0.6,
+                              cursor: 'not-allowed'
                             }
                           }}
                         >

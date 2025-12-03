@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { IoClose } from 'react-icons/io5'
 import { FaCartShopping, FaTrash } from 'react-icons/fa6'
 import { FaUser } from 'react-icons/fa'
@@ -9,7 +9,7 @@ import { fetchCart, removeCartItem } from '../../services/cart'
 const SideCart = ({ isOpen, onClose }) => {
   const { user, api, token } = useAuth();
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [, setError] = useState('');
   const [cart, setCart] = useState({ id: null, items: [] });
 
   useEffect(() => {

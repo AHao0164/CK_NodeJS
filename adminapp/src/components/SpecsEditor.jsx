@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   Box,
   Button,
@@ -17,26 +17,9 @@ import {
   Settings,
 } from '@mui/icons-material';
 
-/**
- * SpecsEditor - Component để quản lý specs dạng NESTED (sections with fields)
- * 
- * Cấu trúc specs (nested object):
- * {
- *   "performance": {
- *     "cpu": "Intel Core i7-13620H",
- *     "gpu": "NVIDIA RTX 4060 8GB",
- *     "ram": "16GB DDR5"
- *   },
- *   "display": {
- *     "size": "15.6 inch",
- *     "resolution": "1920x1080"
- *   }
- * }
- */
 
 export default function SpecsEditor({ specs, onChange }) {
   const [sections, setSections] = useState(() => {
-    // Chuyển specs object thành array of sections
     if (specs && typeof specs === 'object') {
       return Object.entries(specs).map(([sectionKey, sectionValue]) => {
         // Check if nested or flat
@@ -61,7 +44,6 @@ export default function SpecsEditor({ specs, onChange }) {
     return [];
   });
 
-  // Vietnamese translations for common section names
   const sectionTranslations = {
     'performance': 'Hiệu năng',
     'display': 'Màn hình',
@@ -73,7 +55,6 @@ export default function SpecsEditor({ specs, onChange }) {
     'keyboard': 'Bàn phím'
   };
 
-  // Khi sections thay đổi, chuyển về nested object và gọi onChange
   const updateParentSpecs = (newSections) => {
     const specsObject = {};
     newSections.forEach(section => {

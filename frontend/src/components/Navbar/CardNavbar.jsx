@@ -2,19 +2,18 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { gsap } from 'gsap';
 import { GoArrowUpRight } from 'react-icons/go';
 import { SlArrowRight } from 'react-icons/sl';
-import { FaSearch, FaTimes, FaBars, FaUser, FaBell, FaShoppingCart } from 'react-icons/fa';
+import { FaSearch, FaBars, FaUser, FaBell, FaShoppingCart } from 'react-icons/fa';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useCart } from '../../context/CartContext';
 import { listCategories } from '../../services/catalog';
-import VI from '../../constants/vi';
 
 const CardNav = ({
   items,
   className = '',
   ease = 'power3.out'
 }) => {
-  const [isHamburgerOpen, setIsHamburgerOpen] = useState(false);
+  const [setIsHamburgerOpen] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -22,7 +21,7 @@ const CardNav = ({
   const [isCategoryOpen, setIsCategoryOpen] = useState(false);
   const [loadingCategories, setLoadingCategories] = useState(false);
   const navigate = useNavigate();
-  const { token, user } = useAuth();
+  const { token } = useAuth();
   const { cartCount, dismissBadge } = useCart();
   const navRef = useRef(null);
   const cardsRef = useRef([]);
@@ -34,7 +33,6 @@ const CardNav = ({
     const navEl = navRef.current;
     if (!navEl) return 80;
 
-    const isMobile = window.matchMedia('(max-width: 768px)').matches;
     const contentEl = navEl.querySelector('.card-nav-content');
     if (contentEl) {
       const wasVisible = contentEl.style.visibility;
@@ -156,23 +154,6 @@ const CardNav = ({
     return () => window.removeEventListener('resize', handleResize);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isExpanded]);
-
-  // Removed scroll behavior - navbar is always absolute
-
-  const toggleMenu = () => {
-    const tl = tlRef.current;
-    if (!tl) return;
-    if (!isExpanded) {
-      setIsHamburgerOpen(true);
-      setIsExpanded(true);
-      tl.play(0);
-    } else {
-      setIsHamburgerOpen(false);
-      tl.eventCallback('onReverseComplete', () => setIsExpanded(false));
-      tl.reverse();
-    }
-  };
-
 
   const setCardRef = i => el => {
     if (el) cardsRef.current[i] = el;

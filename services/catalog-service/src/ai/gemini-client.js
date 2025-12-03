@@ -8,13 +8,8 @@ if (!API_KEY) {
 
 const genAI = API_KEY ? new GoogleGenerativeAI(API_KEY) : null;
 
-// Get Gemini model instances
-// Try multiple model names in order of preference
 const MODEL_NAMES = [
-  'gemini-2.5-flash',
-  'gemini-1.5-flash',
-  'gemini-1.5-pro',
-  'gemini-pro'
+  'gemini-2.5-flash' 
 ];
 
 // Cache for working model
@@ -34,10 +29,17 @@ export function getGeminiModel(modelName = null) {
   // If specific model requested, try it first
   const modelsToTry = modelName ? [modelName, ...MODEL_NAMES] : MODEL_NAMES;
   
-  // Try to get model (getGenerativeModel doesn't throw, but generateContent will)
-  // So we'll just return the first one and let the caller handle errors
+  // Use latest fastest model with optimized config
   const modelToUse = modelName || MODEL_NAMES[0];
-  const model = genAI.getGenerativeModel({ model: modelToUse });
+  const model = genAI.getGenerativeModel({ 
+    model: modelToUse,
+    generationConfig: {
+      temperature: 0.7,  // Balanced creativity and consistency
+      topP: 0.95,
+      topK: 40,
+      maxOutputTokens: 2048,  // Limit for faster responses
+    }
+  });
   
   // Cache it
   if (!modelName) {
@@ -48,29 +50,25 @@ export function getGeminiModel(modelName = null) {
   return model;
 }
 
-// Get Gemini Vision model for image analysis
 export function getGeminiVisionModel() {
   if (!genAI) {
     throw new Error('Gemini API key not configured');
   }
-  // Try vision-capable models
-  const visionModels = [
-    'gemini-2.5-flash',
-    'gemini-1.5-flash',
-    'gemini-1.5-pro',
-    'gemini-pro-vision'
-  ];
   
-  for (const model of visionModels) {
-    try {
-      return genAI.getGenerativeModel({ model });
-    } catch (error) {
-      continue;
+  // Only use gemini-2.5-flash
+  const modelName = 'gemini-2.5-flash';
+  const model = genAI.getGenerativeModel({ 
+    model: modelName,
+    generationConfig: {
+      temperature: 0.4,  // Lower temperature for more consistent results
+      topP: 0.95,
+      topK: 40,
+      maxOutputTokens: 2048,  // Limit output for faster response
     }
-  }
+  });
   
-  // Fallback to text model
-  return getGeminiModel();
+  console.log(`Using Gemini vision model: ${modelName} (optimized for speed)`);
+  return model;
 }
 
 // Check if AI is available

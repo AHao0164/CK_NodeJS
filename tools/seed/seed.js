@@ -25,49 +25,163 @@ function client(token, isAdmin = false) {
 
 async function login(email, password) {
   const { data, status } = await axios.post(`${API_BASE}/auth/login`, { email, password });
-  if (status >= 400) throw new Error('Admin login failed');
+  if (status >= 400) {
+    const errorMsg = data?.error || `Login failed with status ${status}`;
+    throw new Error(`Login failed: ${errorMsg}`);
+  }
+  if (!data?.token) {
+    throw new Error('Login succeeded but no token received');
+  }
   const payload = JSON.parse(Buffer.from(data.token.split('.')[1], 'base64').toString());
   return { token: data.token, userId: payload.sub };
 }
 
 async function createAdminUser() {
   // Sử dụng env variable hoặc default email
-  const adminEmail = process.env.ADMIN_EMAIL || 'tenho051512@gmail.com';
+  let adminEmail = process.env.ADMIN_EMAIL || 'tenho051512@gmail.com';
   const adminPassword = process.env.ADMIN_PASSWORD || 'admin123456';
   const adminFullName = process.env.ADMIN_FULLNAME || 'System Administrator';
   
   console.log('\n📋 Creating admin account...');
   console.log(`  → Using admin email: ${adminEmail}`);
+  
+  // Step 1: Try to signup (will return 409 if user exists)
+  const signupResult = await signupUser(adminEmail, adminPassword, adminFullName);
+  
+  // Step 2: Try to login
+  let token;
   try {
-    // Try to signup admin
-    await signupUser(adminEmail, adminPassword, adminFullName);
-    
-    // Login to get token
-    const { token } = await login(adminEmail, adminPassword);
-    
-    // Promote to admin role via direct DB (assuming auth service has this endpoint)
+    const loginResult = await login(adminEmail, adminPassword);
+    token = loginResult.token;
+    console.log(`Login successful`);
+  } catch (loginError) {
+    // If login fails, user might exist with different password (from guest checkout)
+    if (signupResult.exists) {
+      console.warn(`\nUser ${adminEmail} already exists but password is incorrect.`);
+      console.warn(`This usually happens when the user was created via guest checkout with a random password.`);
+      
+      // Try to use a different email if ADMIN_EMAIL is not explicitly set
+      if (!process.env.ADMIN_EMAIL) {
+        const timestamp = Date.now();
+        const newEmail = `admin-${timestamp}@seed.local`;
+        console.log(`Trying alternative email: ${newEmail}`);
+        
+        try {
+          const altSignupResult = await signupUser(newEmail, adminPassword, adminFullName);
+          if (altSignupResult.created) {
+            const loginResult = await login(newEmail, adminPassword);
+            token = loginResult.token;
+            adminEmail = newEmail;
+            console.log(`Created and logged in with alternative email: ${newEmail}`);
+          } else {
+            throw new Error(`Alternative email also exists`);
+          }
+        } catch (altError) {
+          console.error(`\nFailed to create alternative admin account: ${altError.message}`);
+          console.error(`\nSolutions:`);
+          console.error(`1. Delete the user from database:`);
+          console.error(`DELETE FROM users WHERE email = '${adminEmail}';`);
+          console.error(`2. Or reset password manually via /forgot-password endpoint`);
+          console.error(`3. Or set ADMIN_EMAIL and ADMIN_PASSWORD env vars to use a different account\n`);
+          throw new Error(`Cannot login to existing user ${adminEmail}. Please delete user or use different email.`);
+        }
+      } else {
+        // ADMIN_EMAIL is explicitly set, don't try alternative
+        console.error(`\nCannot use alternative email because ADMIN_EMAIL is explicitly set.`);
+        console.error(`\nSolutions:`);
+        console.error(`1. Delete the user from database:`);
+        console.error(`DELETE FROM users WHERE email = '${adminEmail}';`);
+        console.error(`2. Or reset password manually via /forgot-password endpoint`);
+        console.error(`3. Or unset ADMIN_EMAIL env var to allow automatic alternative email\n`);
+        throw new Error(`Cannot login to existing user ${adminEmail}. Please delete user or use different email.`);
+      }
+    } else {
+      throw new Error(`Login failed for ${adminEmail}: ${loginError.message}`);
+    }
+  }
+  
+  // Step 3: Promote user to ADMIN role
+  try {
+    const promoteResponse = await axios.post(`${API_BASE}/auth/promote-admin`, {}, 
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (promoteResponse.status === 200) {
+      console.log(`User promoted to ADMIN role`);
+      // Wait longer for database to update and propagate
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Retry login up to 3 times to get token with ADMIN role
+      let retries = 3;
+      let newToken = null;
+      while (retries > 0 && !newToken) {
+        try {
+          const newLoginResult = await login(adminEmail, adminPassword);
+          // Verify token has ADMIN role by decoding it
+          const payload = JSON.parse(Buffer.from(newLoginResult.token.split('.')[1], 'base64').toString());
+          if (payload.role === 'ADMIN') {
+            token = newLoginResult.token;
+            newToken = newLoginResult.token;
+            console.log(`Re-logged in with ADMIN role (verified in token)`);
+          } else {
+            console.log(`Token still has role: ${payload.role}, retrying... (${retries - 1} attempts left)`);
+            await new Promise(resolve => setTimeout(resolve, 500));
+            retries--;
+          }
+        } catch (loginErr) {
+          console.warn(`Re-login attempt failed:`, loginErr.message);
+          await new Promise(resolve => setTimeout(resolve, 500));
+          retries--;
+        }
+      }
+      
+      if (!newToken) {
+        console.warn(`Could not get token with ADMIN role after ${3} attempts`);
+      }
+    } else {
+      console.warn(`Failed to promote to ADMIN: ${promoteResponse.status} - ${JSON.stringify(promoteResponse.data)}`);
+    }
+  } catch (e) {
+    console.warn(`Failed to promote to ADMIN:`, e.message);
+    if (e.response) {
+      console.warn(`Response: ${e.response.status} - ${JSON.stringify(e.response.data)}`);
+    }
+  }
+  
+  // Step 4: Update profile if needed
+  try {
     await axios.patch(`${API_BASE}/auth/profile`, 
       { phoneNumber: '0123456789', address: 'Admin Office' },
       { headers: { Authorization: `Bearer ${token}` } }
     );
-    
-    console.log(`   Admin account created: ${adminEmail}`);
-    console.log(`   Password: ${adminPassword}`);
-    return { email: adminEmail, password: adminPassword };
   } catch (e) {
-    console.warn('  ⚠ Admin account may already exist');
-    return { email: adminEmail, password: adminPassword };
+    console.warn(`Profile update failed (non-critical):`, e.message);
   }
+  
+  console.log(`Admin account ready: ${adminEmail}`);
+  console.log(`Password: ${adminPassword}`);
+  return { email: adminEmail, password: adminPassword };
 }
 
 async function signupUser(email, password, fullName) {
   try {
-    const { status } = await axios.post(`${API_BASE}/auth/signup`, { email, password, fullName });
-    if (status !== 201 && status !== 409) {
-      console.warn(`Signup returned ${status} for ${email}, continuing...`);
+    const { status, data } = await axios.post(`${API_BASE}/auth/signup`, { email, password, fullName });
+    if (status === 201) {
+      console.log(`Created new user: ${email}`);
+      return { created: true };
+    } else if (status === 409) {
+      console.log(`User already exists: ${email}`);
+      return { created: false, exists: true };
+    } else {
+      console.warn(`Signup returned ${status} for ${email}`);
+      return { created: false };
     }
   } catch (e) {
-    console.warn(`Signup error for ${email}, continuing...`);
+    if (e.response?.status === 409) {
+      console.log(`User already exists: ${email}`);
+      return { created: false, exists: true };
+    }
+    console.warn(`Signup error for ${email}:`, e.message);
+    return { created: false };
   }
 }
 
@@ -77,12 +191,12 @@ async function updateUserProfile(email, password, profileData) {
     const api = client(token);
     const { status } = await api.patch('/auth/profile', profileData);
     if (status === 200) {
-      console.log(`   Updated profile for ${email}`);
+      console.log(`Updated profile for ${email}`);
     } else {
-      console.warn(`  ⚠ Profile update returned ${status} for ${email}`);
+      console.warn(`Profile update returned ${status} for ${email}`);
     }
   } catch (e) {
-    console.warn(`  ⚠ Profile update error for ${email}:`, e.message);
+    console.warn(`Profile update error for ${email}:`, e.message);
   }
 }
 
@@ -181,10 +295,10 @@ async function seedCatalog(admin) {
     }
   }
   
-  console.log(`  → Xóa ${brandDeleted} hãng cũ, ${catDeleted} danh mục cũ`);
-  console.log(`  → Thêm ${brandCreated} hãng mới, ${catCreated} danh mục mới`);
-  if (brandFailed.length > 0) console.log(`  ⚠ Hãng thất bại: ${brandFailed.join('; ')}`);
-  if (catFailed.length > 0) console.log(`  ⚠ Danh mục thất bại: ${catFailed.join('; ')}`);
+  console.log(`→ Xóa ${brandDeleted} hãng cũ, ${catDeleted} danh mục cũ`);
+  console.log(`→ Thêm ${brandCreated} hãng mới, ${catCreated} danh mục mới`);
+  if (brandFailed.length > 0) console.log(`Hãng thất bại: ${brandFailed.join('; ')}`);
+  if (catFailed.length > 0) console.log(`Danh mục thất bại: ${catFailed.join('; ')}`);
 
   const { data: allBrands } = await admin.get('/admin/catalog/brands');
   const { data: allCats } = await admin.get('/admin/catalog/categories');
@@ -394,15 +508,14 @@ async function seedCatalog(admin) {
     { sku: 'STEELSERIES-ARCTIS-7PLUS', name: 'SteelSeries Arctis 7+', brand: 'SteelSeries', cat: 'Headset - Tai nghe', priceCents: 3290000, stock: 35, description: 'Wireless, 30h battery, retractable mic', imageUrl: 'https://images.unsplash.com/photo-1599669454699-248893623440?w=800&q=80', images: ['https://images.unsplash.com/photo-1599669454699-248893623440?w=800&q=80', 'https://images.unsplash.com/photo-1545127398-14699f92334b?w=800&q=80', 'https://images.unsplash.com/photo-1591488320449-011701bb6704?w=800&q=80'], specs: { type: 'Wireless Gaming Headset', driver: '40mm neodymium', frequency_response: '20Hz - 20000Hz', impedance: '32 Ohms', surround: 'DTS Headphone:X v2.0', microphone: 'ClearCast Retractable Bidirectional', mic_frequency: '100Hz - 6500Hz', mic_sensitivity: '-38dB', connectivity: 'SteelSeries Sonar Wireless 2.4GHz + USB-C + 3.5mm', battery: '30 hours', fast_charge: '15 min = 3 hours', weight: '350g', earcups: 'AirWeave Memory Foam' }, features: ['Pin 30 giờ siêu trâu + sạc nhanh 15 phút = 3 giờ', 'Micro ClearCast rút gọn tiện lợi Discord certified', 'DTS Headphone:X v2.0 âm thanh vòm 7.1 sống động', 'Kết nối không dây 2.4GHz ổn định zero lag', 'Băng đầu treo SKI Goggle siêu thoải mái', 'Đệm tai AirWeave thoáng mát không nóng', 'Tương thích PC, PlayStation, Nintendo Switch'] }
   ];
 
-  // Lấy danh sách products hiện có để kiểm tra SKU trùng lặp
   // Thay vì xóa tất cả, chúng ta sẽ UPDATE nếu SKU trùng hoặc tạo mới nếu chưa có
   const { data: current } = await admin.get('/admin/catalog/products?pageSize=1000');
   const existingProducts = Array.isArray(current) ? current : (current?.items || []);
   const existingBySku = new Map(existingProducts.map(p => [p.sku?.toUpperCase(), p]));
-  console.log(`  → Tìm thấy ${existingProducts.length} sản phẩm hiện có`);
+  console.log(`Tìm thấy ${existingProducts.length} sản phẩm hiện có`);
 
   // Thêm hoặc cập nhật sản phẩm
-  console.log(`  → Thêm/cập nhật ${products.length} sản phẩm`);
+  console.log(`Thêm/cập nhật ${products.length} sản phẩm`);
   let successCount = 0;
   let updateCount = 0;
   let createCount = 0;
@@ -462,7 +575,7 @@ async function seedCatalog(admin) {
           } else {
             failCount++;
             if (failCount <= 3) {
-              console.warn(`    Failed to create/update product "${p.name}": ${createResponse.status} - ${JSON.stringify(createResponse.data)}`);
+              console.warn(`Failed to create/update product "${p.name}": ${createResponse.status} - ${JSON.stringify(createResponse.data)}`);
             }
           }
         }
@@ -489,7 +602,7 @@ async function seedCatalog(admin) {
         } else {
           failCount++;
           if (failCount <= 3) {
-            console.warn(`    Failed to create product "${p.name}": ${response.status} - ${JSON.stringify(response.data)}`);
+            console.warn(`Failed to create product "${p.name}": ${response.status} - ${JSON.stringify(response.data)}`);
           }
         }
       }
@@ -501,14 +614,14 @@ async function seedCatalog(admin) {
     } catch (error) {
       failCount++;
       if (failCount <= 3) {
-        console.warn(`    Error processing product "${p.name}":`, error.message);
+        console.warn(`Error processing product "${p.name}":`, error.message);
         if (error.response) {
-          console.warn(`      Response: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
+          console.warn(`Response: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
         }
       }
     }
   }
-  console.log(`   ✅ ${successCount}/${products.length} sản phẩm thành công (${createCount} tạo mới, ${updateCount} cập nhật, ${failCount} thất bại) - ${categories.length} danh mục`);
+  console.log(`${successCount}/${products.length} sản phẩm thành công (${createCount} tạo mới, ${updateCount} cập nhật, ${failCount} thất bại) - ${categories.length} danh mục`);
   
   // Tạo variants cho một số sản phẩm (ít nhất 2 variants mỗi sản phẩm)
   await seedVariants(admin, createdProductIds);
@@ -836,7 +949,6 @@ async function seedReviews() {
     const productList = products?.items || products || [];
     if (productList.length === 0) return;
     
-    // Tạo reviews với ratings đa dạng để test filter by rating
     const sampleReviews = [
       { rating: 5, comment: 'Sản phẩm tuyệt vời! Chất lượng xuất sắc, giao hàng nhanh. Recommend!' },
       { rating: 5, comment: 'Quá hài lòng! Chính xác như mô tả. 5 sao không cần bàn cãi!' },
@@ -908,8 +1020,90 @@ async function main() {
     addressDetail: '456 Lê Lợi'
   });
   
-  const { token: adminToken } = await login(adminEmail, adminPassword);
-  console.log(`Admin token obtained: ${adminToken ? 'Yes' : 'No'}`);
+  // Create or verify admin user exists with correct password
+  let adminToken;
+  let actualAdminEmail = adminEmail;
+  let actualAdminPassword = adminPassword;
+  try {
+    const { token } = await login(adminEmail, adminPassword);
+    adminToken = token;
+    console.log(`Admin login successful`);
+    
+    // Check if user has ADMIN role, if not, promote them
+    try {
+      const promoteResponse = await axios.post(`${API_BASE}/auth/promote-admin`, {}, 
+        { headers: { Authorization: `Bearer ${adminToken}` } }
+      );
+      if (promoteResponse.status === 200) {
+        console.log(`User promoted to ADMIN role`);
+        // Wait longer for database to update
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Retry login to get token with ADMIN role
+        let retries = 3;
+        while (retries > 0) {
+          try {
+            const { token: newToken } = await login(adminEmail, adminPassword);
+            // Verify token has ADMIN role
+            const payload = JSON.parse(Buffer.from(newToken.split('.')[1], 'base64').toString());
+            if (payload.role === 'ADMIN') {
+              adminToken = newToken;
+              console.log(`Re-logged in with ADMIN role (verified)`);
+              break;
+            } else {
+              console.log(`Token role: ${payload.role}, retrying... (${retries - 1} left)`);
+              await new Promise(resolve => setTimeout(resolve, 500));
+              retries--;
+            }
+          } catch (loginErr) {
+            console.warn(`   ⚠ Re-login failed:`, loginErr.message);
+            await new Promise(resolve => setTimeout(resolve, 500));
+            retries--;
+          }
+        }
+      }
+    } catch (promoteErr) {
+      // If promotion fails, it might be because user already has ADMIN role or email doesn't match
+      console.log(`Promotion check: ${promoteErr.response?.data?.error || promoteErr.message}`);
+    }
+  } catch (loginError) {
+    // If login fails, try to create the admin user
+    console.log(`Admin login failed, attempting to create admin user...`);
+    const adminCreds = await createAdminUser();
+    actualAdminEmail = adminCreds.email;
+    actualAdminPassword = adminCreds.password;
+    
+    // Wait longer for database to update role
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // Retry login to get token with ADMIN role
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        const { token } = await login(actualAdminEmail, actualAdminPassword);
+        // Verify token has ADMIN role
+        const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+        if (payload.role === 'ADMIN') {
+          adminToken = token;
+          console.log(`Admin user created and logged in with ADMIN role (verified)`);
+          break;
+        } else {
+          console.log(`Token role: ${payload.role}, retrying... (${retries - 1} left)`);
+          await new Promise(resolve => setTimeout(resolve, 500));
+          retries--;
+        }
+      } catch (loginErr) {
+        console.warn(`Login failed:`, loginErr.message);
+        await new Promise(resolve => setTimeout(resolve, 500));
+        retries--;
+      }
+    }
+    
+    if (!adminToken) {
+      throw new Error('Failed to get admin token after creating user');
+    }
+  }
+  
   const admin = client(adminToken, true); // Pass true to set x-user-role header
   
   // Test admin access
@@ -927,30 +1121,16 @@ async function main() {
   const createdProducts = await seedCatalog(admin);
   await seedBanners(admin);
   
-  console.log('  → Xóa giỏ hàng cũ');
+  console.log('Xóa giỏ hàng cũ');
   await clearUserCart('tendemten051512@gmail.com', '123456');
   await clearUserCart('hoten051512@gmail.com', '123456');
   
-  console.log('  → Tạo demo orders');
+  console.log('Tạo demo orders');
   await seedDemoOrders('tendemten051512@gmail.com', '123456');
   await seedDemoOrders('hoten051512@gmail.com', '123456');
 
   await seedReviews();
   console.log('Hoàn thành seed - GearUp sẵn sàng!');
-  console.log('Tổng kết:');
-  console.log('   - 16 danh mục (Laptop + PC components + Peripherals)');
-  console.log('   - 60+ sản phẩm đa dạng');
-  console.log('   - Variants cho 15+ sản phẩm (mỗi sản phẩm có 2-3 variants)');
-  console.log('   - Reviews với ratings đa dạng (1-5 sao) để test filter by rating');
-  console.log('   - Filter theo category, brand, price, rating hoạt động');
-  console.log('   - Search trong specs (JSON_SEARCH)');
-  console.log('   - Pagination hiển thị ngay cả khi chỉ có 1 trang');
-  console.log('   - Listview/Gridview toggle');
-  console.log('   - WebSocket real-time reviews');
-  console.log('\nLƯU Ý: Nếu bạn đang đăng nhập sẵn trong browser, hãy:');
-  console.log('   1. Mở DevTools (F12)');
-  console.log('   2. Console tab, chạy: localStorage.clear(); sessionStorage.clear()');
-  console.log('   3. Reload trang (F5) để đăng xuất hoàn toàn\n');
 }
 
 main().catch((e) => {

@@ -1,11 +1,5 @@
 import * as XLSX from 'xlsx';
 
-/**
- * Xuất dữ liệu ra file Excel
- * @param {Array} data - Dữ liệu cần xuất
- * @param {String} filename - Tên file (không cần đuôi .xlsx)
- * @param {String} sheetName - Tên sheet
- */
 export function exportToExcel(data, filename, sheetName = 'Sheet1') {
   // Tạo workbook và worksheet
   const worksheet = XLSX.utils.json_to_sheet(data);
@@ -16,9 +10,6 @@ export function exportToExcel(data, filename, sheetName = 'Sheet1') {
   XLSX.writeFile(workbook, `${filename}.xlsx`);
 }
 
-/**
- * Format dữ liệu sản phẩm để xuất Excel
- */
 export function formatProductsForExport(products) {
   return products.map((p, index) => ({
     'STT': index + 1,
@@ -34,9 +25,6 @@ export function formatProductsForExport(products) {
   }));
 }
 
-/**
- * Format dữ liệu đơn hàng để xuất Excel
- */
 export function formatOrdersForExport(orders) {
   return orders.map((o, index) => ({
     'STT': index + 1,
@@ -50,9 +38,6 @@ export function formatOrdersForExport(orders) {
   }));
 }
 
-/**
- * Format dữ liệu khách hàng để xuất Excel
- */
 export function formatCustomersForExport(customers) {
   return customers.map((c, index) => ({
     'STT': index + 1,
@@ -66,9 +51,6 @@ export function formatCustomersForExport(customers) {
   }));
 }
 
-/**
- * Format dữ liệu thương hiệu để xuất Excel
- */
 export function formatBrandsForExport(brands) {
   return brands.map((b, index) => ({
     'STT': index + 1,
@@ -78,9 +60,6 @@ export function formatBrandsForExport(brands) {
   }));
 }
 
-/**
- * Format dữ liệu danh mục để xuất Excel
- */
 export function formatCategoriesForExport(categories) {
   return categories.map((c, index) => ({
     'STT': index + 1,
@@ -90,9 +69,7 @@ export function formatCategoriesForExport(categories) {
   }));
 }
 
-/**
- * Format dữ liệu doanh thu để xuất Excel
- */
+
 export function formatRevenueForExport(orders) {
   const deliveredOrders = orders.filter(o => o.status === 'DELIVERED');
   
@@ -106,9 +83,6 @@ export function formatRevenueForExport(orders) {
   }));
 }
 
-/**
- * Helper: Chuyển status code thành text tiếng Việt
- */
 function getOrderStatusText(status) {
   const statusMap = {
     'PENDING': 'Chờ xác nhận',
