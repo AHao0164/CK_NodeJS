@@ -7,7 +7,7 @@ const DEFAULT_SPOTLIGHT_RADIUS = 300;
 const DEFAULT_GLOW_COLOR = '132, 0, 255';
 const MOBILE_BREAKPOINT = 768;
 
-// Fallback static data nếu API fail
+// Fallback static data if API fail
 const FALLBACK_CARD_DATA = [
   {
     image: '/images/hero/bento-1.jpg',
@@ -444,7 +444,7 @@ const MagicBento = ({
         }
       } catch (error) {
         console.error('Failed to load banners, using fallback:', error);
-        // Giữ nguyên FALLBACK_CARD_DATA nếu API fail
+        // Keep using FALLBACK_CARD_DATA if API fails
       } finally {
         setLoading(false);
       }

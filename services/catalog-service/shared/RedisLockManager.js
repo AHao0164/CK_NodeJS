@@ -1,9 +1,5 @@
 import { createClient } from 'redis';
 
-/**
- * Redis Distributed Lock Manager
- * Implements distributed locking pattern for microservices
- */
 class RedisLockManager {
   constructor(redisUrl) {
     this.client = createClient({
@@ -11,7 +7,7 @@ class RedisLockManager {
     });
     
     this.client.on('error', (err) => console.error('Redis Client Error:', err));
-    this.client.on('connect', () => console.log('✅ Redis Lock Manager connected'));
+    this.client.on('connect', () => console.log('Redis Lock Manager connected'));
     
     this.isConnected = false;
   }
@@ -30,14 +26,6 @@ class RedisLockManager {
     }
   }
 
-  /**
-   * Acquire a distributed lock with automatic expiration
-   * @param {string} lockKey - Unique identifier for the lock
-   * @param {number} ttlSeconds - Time-to-live in seconds (default: 10s)
-   * @param {number} maxRetries - Maximum retry attempts (default: 5)
-   * @param {number} retryDelayMs - Delay between retries in milliseconds (default: 100ms)
-   * @returns {Promise<string|null>} Lock token if acquired, null if failed
-   */
   async acquireLock(lockKey, ttlSeconds = 10, maxRetries = 5, retryDelayMs = 100) {
     const lockToken = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const fullKey = `lock:${lockKey}`;
@@ -51,7 +39,7 @@ class RedisLockManager {
         });
 
         if (result === 'OK') {
-          console.log(`🔒 Lock acquired: ${lockKey} (token: ${lockToken})`);
+          console.log(`Lock acquired: ${lockKey} (token: ${lockToken})`);
           return lockToken;
         }
 
@@ -59,35 +47,28 @@ class RedisLockManager {
         const ttl = await this.client.ttl(fullKey);
         if (ttl === -1) {
           // Key exists but no expiration - this shouldn't happen, but handle it
-          console.warn(`⚠️ Lock ${lockKey} exists without TTL, setting expiration`);
+          console.warn(`Lock ${lockKey} exists without TTL, setting expiration`);
           await this.client.expire(fullKey, ttlSeconds);
         }
 
         // Wait before retry with exponential backoff
         const delay = retryDelayMs * Math.pow(1.5, attempt);
-        console.log(`⏳ Lock ${lockKey} busy, retry ${attempt + 1}/${maxRetries} in ${delay}ms`);
+        console.log(`Lock ${lockKey} busy, retry ${attempt + 1}/${maxRetries} in ${delay}ms`);
         await this.sleep(delay);
       } catch (error) {
-        console.error(`❌ Error acquiring lock ${lockKey}:`, error.message);
+        console.error(`Error acquiring lock ${lockKey}:`, error.message);
         throw error;
       }
     }
 
-    console.log(`❌ Failed to acquire lock: ${lockKey} after ${maxRetries} attempts`);
+    console.log(`Failed to acquire lock: ${lockKey} after ${maxRetries} attempts`);
     return null;
   }
 
-  /**
-   * Release a distributed lock safely (only if we own it)
-   * @param {string} lockKey - Lock identifier
-   * @param {string} lockToken - Token received from acquireLock
-   * @returns {Promise<boolean>} True if released, false otherwise
-   */
   async releaseLock(lockKey, lockToken) {
     const fullKey = `lock:${lockKey}`;
 
     try {
-      // Lua script for atomic check-and-delete
       // Only delete if the token matches (we own the lock)
       const luaScript = `
         if redis.call("get", KEYS[1]) == ARGV[1] then
@@ -103,25 +84,18 @@ class RedisLockManager {
       });
 
       if (result === 1) {
-        console.log(`🔓 Lock released: ${lockKey} (token: ${lockToken})`);
+        console.log(`Lock released: ${lockKey} (token: ${lockToken})`);
         return true;
       } else {
-        console.warn(`⚠️ Lock ${lockKey} not released - token mismatch or already expired`);
+        console.warn(`Lock ${lockKey} not released - token mismatch or already expired`);
         return false;
       }
     } catch (error) {
-      console.error(`❌ Error releasing lock ${lockKey}:`, error.message);
+      console.error(`Error releasing lock ${lockKey}:`, error.message);
       return false;
     }
   }
 
-  /**
-   * Execute a function with automatic lock acquisition and release
-   * @param {string} lockKey - Lock identifier
-   * @param {Function} fn - Async function to execute
-   * @param {object} options - Lock options
-   * @returns {Promise<any>} Result of the function
-   */
   async withLock(lockKey, fn, options = {}) {
     const {
       ttlSeconds = 10,
@@ -149,34 +123,17 @@ class RedisLockManager {
     }
   }
 
-  /**
-   * Check if a lock is currently held
-   * @param {string} lockKey - Lock identifier
-   * @returns {Promise<boolean>} True if locked, false otherwise
-   */
   async isLocked(lockKey) {
     const fullKey = `lock:${lockKey}`;
     const exists = await this.client.exists(fullKey);
     return exists === 1;
   }
 
-  /**
-   * Get remaining TTL of a lock
-   * @param {string} lockKey - Lock identifier
-   * @returns {Promise<number>} Remaining seconds, -1 if no expiration, -2 if key doesn't exist
-   */
   async getLockTTL(lockKey) {
     const fullKey = `lock:${lockKey}`;
     return await this.client.ttl(fullKey);
   }
 
-  /**
-   * Rate limiting using Redis
-   * @param {string} key - Rate limit key (e.g., user:123:login)
-   * @param {number} maxRequests - Maximum requests allowed
-   * @param {number} windowSeconds - Time window in seconds
-   * @returns {Promise<{allowed: boolean, remaining: number, resetAt: number}>}
-   */
   async rateLimit(key, maxRequests, windowSeconds) {
     const fullKey = `ratelimit:${key}`;
     const now = Date.now();
@@ -213,18 +170,12 @@ class RedisLockManager {
         resetAt: Math.ceil((now + (windowSeconds * 1000)) / 1000)
       };
     } catch (error) {
-      console.error(`❌ Rate limit error for ${key}:`, error.message);
+      console.error(`Rate limit error for ${key}:`, error.message);
       // Fail open - allow the request if Redis is down
       return { allowed: true, remaining: maxRequests, resetAt: Math.ceil((now + (windowSeconds * 1000)) / 1000) };
     }
   }
 
-  /**
-   * Increment a counter atomically
-   * @param {string} key - Counter key
-   * @param {number} ttlSeconds - Expiration time (optional)
-   * @returns {Promise<number>} New counter value
-   */
   async incrementCounter(key, ttlSeconds = null) {
     const fullKey = `counter:${key}`;
     const value = await this.client.incr(fullKey);
@@ -237,30 +188,16 @@ class RedisLockManager {
     return value;
   }
 
-  /**
-   * Get counter value
-   * @param {string} key - Counter key
-   * @returns {Promise<number>} Counter value
-   */
   async getCounter(key) {
     const fullKey = `counter:${key}`;
     const value = await this.client.get(fullKey);
     return value ? parseInt(value, 10) : 0;
   }
 
-  /**
-   * Helper function to sleep
-   * @param {number} ms - Milliseconds to sleep
-   * @returns {Promise<void>}
-   */
   sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  /**
-   * Clear all locks (use with caution, mainly for testing)
-   * @returns {Promise<number>} Number of locks cleared
-   */
   async clearAllLocks() {
     const keys = await this.client.keys('lock:*');
     if (keys.length === 0) return 0;

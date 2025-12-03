@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { FaTimes } from 'react-icons/fa';
 
 const TermsModal = ({ isOpen, onClose, type = 'terms' }) => {

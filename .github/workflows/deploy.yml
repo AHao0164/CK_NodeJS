@@ -71,7 +71,7 @@ jobs:
       
       - name: Deployment summary
         run: |
-          echo "✅ Deployment completed!"
+          echo "Deployment completed!"
           echo "Services available for deployment:"
           echo "  - API Gateway (${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/api-gateway:latest)"
           echo "  - Auth Service (${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/auth-service:latest)"

@@ -1,12 +1,5 @@
 import { useEffect } from 'react';
 
-/**
- * AutoRefresh component - automatically refreshes the page at specified intervals
- * Useful for admin dashboards that need to stay updated 24/7
- * 
- * @param {number} intervalMinutes - Refresh interval in minutes (default: 60)
- * @param {boolean} enabled - Enable/disable auto-refresh (default: true)
- */
 export default function AutoRefresh({ intervalMinutes = 60, enabled = true }) {
   useEffect(() => {
     if (!enabled) return;
@@ -27,5 +20,5 @@ export default function AutoRefresh({ intervalMinutes = 60, enabled = true }) {
     };
   }, [intervalMinutes, enabled]);
 
-  return null; // This component doesn't render anything
+  return null; 
 }

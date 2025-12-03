@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import Button from '../components/ui/Button'
 import { Card, CardBody } from '../components/ui/Card'
 import { fetchCart } from '../services/cart'
-import { checkoutOrder, payForOrder, validateCoupon } from '../services/orders'
+import { validateCoupon } from '../services/orders'
 import { publicApi } from '../api/client'
 import { motion } from 'framer-motion'
 import { useToast } from '../ui/Toast'
@@ -14,7 +14,7 @@ import { getProvinces, getWards } from '../constants/vietnamLocations'
 import { getCurrentUser } from '../services/auth'
 
 export default function Checkout() {
-  const { api, user, token } = useAuth()
+  const { api, token } = useAuth()
   const location = useLocation()
   const [cart, setCart] = useState({ items: [] })
   const [catalog, setCatalog] = useState([])
@@ -82,9 +82,6 @@ export default function Checkout() {
 
     const loadForGuest = async () => {
       try {
-        // Priority 1: Load from location.state?.selectedItems (from Cart page - already selected)
-        // Priority 2: Load from location.state?.guestItems (from Buy Now)
-        // Priority 3: Load from sessionStorage (fallback)
         let mapped = []
         
         if (Array.isArray(location.state?.selectedItems) && location.state.selectedItems.length > 0) {
@@ -178,20 +175,12 @@ export default function Checkout() {
     if (!coupon) return 0
     
     // Backend stores coupon.value:
-    // - For percentage: value is the percentage number (e.g., 10 = 10%)
-    // - For fixed: value can be in two formats:
-    //   1. Old format (seed data): value = actual VND amount (e.g., 10000 = 10,000 VND)
-    //   2. New format (admin app): value = VND * 100 (e.g., admin enters 10,000 → DB stores 1,000,000)
-    // Frontend subtotal is in the same unit as price_cents (which is actually VND, not real cents)
     let calculatedDiscount = 0
     
     if (coupon.type === 'percentage') {
       // coupon.value is percentage (10 = 10%), calculate discount
       calculatedDiscount = Math.floor(subtotal * (coupon.value / 100))
     } else if (coupon.type === 'fixed') {
-      // FIX: Admin app multiplies value by 100 when saving fixed coupons
-      // Check if value is likely multiplied by 100 (large number and divisible by 100)
-      // Example: Admin enters 10,000 VND → saved as 1,000,000 → divide by 100 = 10,000
       let fixedDiscountAmount = coupon.value
       if (coupon.value >= 100000 && coupon.value % 100 === 0) {
         // Likely multiplied by 100 by admin app, divide by 100 to get actual VND
@@ -243,20 +232,17 @@ export default function Checkout() {
   const handleConfirmPayment = () => {
     const validationError = validateShipping()
     if (validationError) {
-      toast.show(`❌ ${validationError}`, { type: 'error' })
+      toast.show(`${validationError}`, { type: 'error' })
       return
     }
     if (!paymentMethod) {
-      toast.show('❌ Vui lòng chọn phương thức thanh toán', { type: 'error' })
+      toast.show('Vui lòng chọn phương thức thanh toán', { type: 'error' })
       return
     }
     if (!agreeTerms) {
-      toast.show('❌ Vui lòng đồng ý với điều khoản thanh toán', { type: 'error' })
+      toast.show('Vui lòng đồng ý với điều khoản thanh toán', { type: 'error' })
       return
     }
-
-    // Khách chưa đăng nhập có thể dùng cả VNPay và COD
-    // COD sẽ gửi OTP qua email từ form shipping
 
     if (paymentMethod === 'COD') {
       handleCODPayment()
@@ -315,7 +301,7 @@ export default function Checkout() {
         // Redirect to VNPay payment page
         window.location.href = vnpayResponse.paymentUrl
       } else {
-        toast.show('❌ Không thể tạo thanh toán VNPay', { type: 'error' })
+        toast.show('Không thể tạo thanh toán VNPay', { type: 'error' })
       }
     } catch (error) {
       console.error('VNPay error:', error)
@@ -327,7 +313,7 @@ export default function Checkout() {
         const fullMessage = details.length > 0 
           ? `${errorMsg}:\n${details.map((d, i) => `${i + 1}. ${d}`).join('\n')}`
           : errorMsg
-        toast.show(`❌ ${fullMessage}`, { type: 'error', duration: 6000 })
+        toast.show(`${fullMessage}`, { type: 'error', duration: 6000 })
         // Refresh cart to update quantities
         if (token) {
           try {
@@ -338,7 +324,7 @@ export default function Checkout() {
           }
         }
       } else {
-        toast.show('❌ Lỗi kết nối đến VNPay', { type: 'error' })
+        toast.show('Lỗi kết nối đến VNPay', { type: 'error' })
       }
     } finally {
       setLoading(false)
@@ -409,7 +395,7 @@ export default function Checkout() {
         orderId: orderData.orderId // Include orderId for guest users
       })
 
-      toast.show(`✅ Đã gửi mã OTP xác nhận đơn hàng đến email ${shipping.email}`, { type: 'success' })
+      toast.show(`Đã gửi mã OTP xác nhận đơn hàng đến email ${shipping.email}`, { type: 'success' })
       setShowCODOtpForm(true)
       setOtpCountdown(180)
       
@@ -438,7 +424,7 @@ export default function Checkout() {
         if (details.length > 0) {
           errorMsg = `${errorMsg}:\n${details.map((d, i) => `${i + 1}. ${d}`).join('\n')}`
         }
-        toast.show(`❌ ${errorMsg}`, { type: 'error', duration: 6000 })
+        toast.show(`${errorMsg}`, { type: 'error', duration: 6000 })
         // Refresh cart to update quantities
         if (token) {
           try {
@@ -459,7 +445,7 @@ export default function Checkout() {
             errorMsg = e.response.data.details.join(', ')
           }
         }
-        toast.show(`❌ ${errorMsg}`, { type: 'error' })
+        toast.show(`${errorMsg}`, { type: 'error' })
       }
     } finally {
       setLoading(false)
@@ -468,12 +454,12 @@ export default function Checkout() {
 
   const handleCODOtpSubmit = async () => {
     if (!codOtp || codOtp.length !== 6) {
-      toast.show('❌ Vui lòng nhập đủ 6 số OTP', { type: 'error' })
+      toast.show('Vui lòng nhập đủ 6 số OTP', { type: 'error' })
       return
     }
 
     if (!shipping.email) {
-      toast.show('❌ Thiếu thông tin email', { type: 'error' })
+      toast.show('Thiếu thông tin email', { type: 'error' })
       return
     }
 
@@ -483,7 +469,7 @@ export default function Checkout() {
       const orderId = pendingOrder.orderId
 
       if (!orderId) {
-        toast.show('❌ Không tìm thấy thông tin đơn hàng. Vui lòng thử lại.', { type: 'error' })
+        toast.show('Không tìm thấy thông tin đơn hàng. Vui lòng thử lại.', { type: 'error' })
         return
       }
 
@@ -493,7 +479,6 @@ export default function Checkout() {
       const apiClient = token ? api : publicApi
 
       // Verify OTP with backend (works for both authenticated and guest users)
-      // Backend will confirm order and deduct stock automatically
       const response = await apiClient.post('/auth/verify-cod-otp', {
         email: shipping.email,
         otp: codOtp,
@@ -517,7 +502,7 @@ export default function Checkout() {
       }
       
       setShowCODOtpForm(false)
-      toast.show(`✓ Đặt hàng thành công! Mã đơn hàng #${orderId}`, { type: 'success' })
+      toast.show(`Đặt hàng thành công! Mã đơn hàng #${orderId}`, { type: 'success' })
       
       // For guest users, navigate to home or show success message
       // For authenticated users, navigate to orders page
@@ -532,7 +517,7 @@ export default function Checkout() {
       // Handle stock errors specifically
       if (e?.response?.data?.error === 'OUT_OF_STOCK' && e?.response?.data?.cancelled) {
         const errorMsg = e.response.data.message || 'Sản phẩm đã hết hàng. Đơn hàng đã bị hủy.'
-        toast.show(`⚠️ ${errorMsg}`, { type: 'warning', duration: 8000 })
+        toast.show(`${errorMsg}`, { type: 'warning', duration: 8000 })
         setShowCODOtpForm(false)
         // Refresh cart to update quantities
         if (token) {
@@ -547,7 +532,7 @@ export default function Checkout() {
         setTimeout(() => navigate('/cart'), 3000)
       } else {
         const msg = e?.response?.data?.error || e?.response?.data?.message || 'Mã OTP không đúng hoặc đã hết hạn'
-        toast.show(`❌ ${msg}`, { type: 'error' })
+        toast.show(`${msg}`, { type: 'error' })
       }
     }
   }

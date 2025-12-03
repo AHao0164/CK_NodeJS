@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import { useToast } from '../../ui/Toast'
@@ -45,7 +45,7 @@ const Login = () => {
     const errorParam = searchParams.get('error');
     
     if (errorParam) {
-      toast.show('❌ Đăng nhập thất bại', { type: 'error' });
+      toast.show('Đăng nhập thất bại', { type: 'error' });
       return;
     }
     
@@ -58,7 +58,7 @@ const Login = () => {
       const savedPassword = localStorage.getItem('rememberedPassword');
       if (savedEmail && savedPassword) {
         setEmail(savedEmail);
-        setPassword(atob(savedPassword)); // Decode from base64
+        setPassword(atob(savedPassword));
         setRememberMe(true);
       }
     }
@@ -72,7 +72,7 @@ const Login = () => {
       const userData = await getCurrentUser(tempApi);
       
       login(token, userData);
-      toast.show(`🎉 Chào mừng ${userData.fullName || userData.email || emailParam}!`, { type: 'success', duration: 2000 });
+      toast.show(`Chào mừng ${userData.fullName || userData.email || emailParam}!`, { type: 'success', duration: 2000 });
       
       // Check if there's a return URL
       const returnUrl = localStorage.getItem('returnUrl');
@@ -84,7 +84,7 @@ const Login = () => {
       }
     } catch (err) {
       console.error('OAuth login error:', err);
-      toast.show('❌ Không thể lấy thông tin người dùng', { type: 'error' });
+      toast.show('Không thể lấy thông tin người dùng', { type: 'error' });
     }
   };
 

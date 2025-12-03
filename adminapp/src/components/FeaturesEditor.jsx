@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   Box,
   Button,
@@ -19,16 +19,6 @@ import {
   DragIndicator,
 } from '@mui/icons-material';
 
-/**
- * FeaturesEditor - Component để quản lý danh sách tính năng nổi bật
- * 
- * features là mảng string:
- * [
- *   "Intel® Core™ Ultra processors for handling complex tasks",
- *   "Exceptional realism & vibrant visuals on OLED display",
- *   ...
- * ]
- */
 export default function FeaturesEditor({ features, onChange }) {
   const [items, setItems] = useState(() => {
     return Array.isArray(features) ? features : [];

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useToast } from '../ui/Toast';
 import { FaEye, FaEyeSlash, FaLock, FaHome } from 'react-icons/fa';

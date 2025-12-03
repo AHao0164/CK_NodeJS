@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { listOrders } from '../services/orders'
 import { Card, CardBody } from '../components/ui/Card'

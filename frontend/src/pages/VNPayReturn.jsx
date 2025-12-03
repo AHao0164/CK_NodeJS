@@ -15,17 +15,14 @@ export default function VNPayReturn() {
   useEffect(() => {
     const verifyPayment = async () => {
       try {
-        // 🔥 CRITICAL: Gọi backend để xác nhận thanh toán và trừ stock
         const queryString = window.location.search;
         const { data: paymentResult } = await api.get(`/payment/vnpay/return${queryString}`);
         
         console.log('Payment verification result:', paymentResult);
 
         if (paymentResult.success) {
-          // ✅ Payment successful - BUT check order status to ensure it wasn't cancelled due to stock
           const orderId = paymentResult.data?.orderId || searchParams.get('vnp_TxnRef');
           
-          // Check order status to verify it wasn't cancelled
           let orderStatus = null;
           if (orderId) {
             try {
@@ -42,17 +39,16 @@ export default function VNPayReturn() {
           if (orderStatus === 'CANCELLED') {
             setStatus('failed');
             setMessage('Thanh toán thành công nhưng sản phẩm đã hết hàng. Đơn hàng đã bị hủy và sẽ được hoàn tiền.');
-            toast.show('⚠️ Sản phẩm đã hết hàng! Đơn hàng bị hủy, vui lòng liên hệ để hoàn tiền.', { type: 'warning', duration: 8000 });
+            toast.show('Sản phẩm đã hết hàng! Đơn hàng bị hủy, vui lòng liên hệ để hoàn tiền.', { type: 'warning', duration: 8000 });
             
             // Redirect to cart after 10 seconds
             setTimeout(() => {
               navigate('/cart');
             }, 10000);
           } else {
-            // ✅ Payment successful + Order confirmed + Stock reserved
             setStatus('success');
             setMessage(paymentResult.message || 'Thanh toán thành công!');
-            toast.show('✅ Thanh toán thành công!', { type: 'success' });
+            toast.show('Thanh toán thành công!', { type: 'success' });
             
             // Clear cart
             try {
@@ -70,16 +66,16 @@ export default function VNPayReturn() {
             }, 3000);
           }
         } else {
-          // ❌ Payment failed or out of stock
+          // Payment failed or out of stock
           setStatus('failed');
           
           // Kiểm tra nếu là lỗi hết hàng (OUT_OF_STOCK)
           if (paymentResult.code === 'OUT_OF_STOCK' && paymentResult.cancelled) {
             setMessage(paymentResult.message || 'Sản phẩm đã hết hàng. Đơn hàng đã bị hủy và sẽ được hoàn tiền.');
-            toast.show('⚠️ Sản phẩm đã hết hàng! Đơn hàng bị hủy, vui lòng liên hệ để hoàn tiền.', { type: 'warning', duration: 8000 });
+            toast.show('Sản phẩm đã hết hàng! Đơn hàng bị hủy, vui lòng liên hệ để hoàn tiền.', { type: 'warning', duration: 8000 });
           } else if (paymentResult.code === '00' && paymentResult.message?.includes('hết hàng')) {
             setMessage('Thanh toán thành công nhưng sản phẩm đã hết hàng. Đơn hàng đã bị hủy và sẽ được hoàn tiền.');
-            toast.show('⚠️ Sản phẩm đã hết hàng! Đơn hàng bị hủy, vui lòng liên hệ để hoàn tiền.', { type: 'warning', duration: 8000 });
+            toast.show('Sản phẩm đã hết hàng! Đơn hàng bị hủy, vui lòng liên hệ để hoàn tiền.', { type: 'warning', duration: 8000 });
           } else {
             const errorMessages = {
               '07': 'Giao dịch bị nghi ngờ (liên quan tới lừa đảo)',
@@ -96,7 +92,7 @@ export default function VNPayReturn() {
             };
             
             setMessage(paymentResult.message || errorMessages[paymentResult.code] || 'Thanh toán thất bại');
-            toast.show(`❌ ${paymentResult.message || errorMessages[paymentResult.code] || 'Thanh toán thất bại'}`, { type: 'error' });
+            toast.show(`${paymentResult.message || errorMessages[paymentResult.code] || 'Thanh toán thất bại'}`, { type: 'error' });
           }
           
           // Redirect to cart after 10 seconds (give user time to read and choose)
@@ -108,7 +104,7 @@ export default function VNPayReturn() {
         console.error('Verify payment error:', error);
         setStatus('failed');
         setMessage('Có lỗi xảy ra khi xác thực thanh toán');
-        toast.show('❌ Có lỗi xảy ra khi xác thực thanh toán', { type: 'error' });
+        toast.show('Có lỗi xảy ra khi xác thực thanh toán', { type: 'error' });
       }
     };
 

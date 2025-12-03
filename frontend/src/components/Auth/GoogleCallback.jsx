@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../ui/Toast';
@@ -15,7 +15,7 @@ const GoogleCallback = () => {
       const error = searchParams.get('error');
 
       if (error) {
-        toast.show('❌ Đăng nhập Google thất bại', { type: 'error' });
+        toast.show('Đăng nhập Google thất bại', { type: 'error' });
         navigate('/login');
         return;
       }
@@ -29,7 +29,7 @@ const GoogleCallback = () => {
           const userData = await getCurrentUser(tempApi);
           
           login(token, userData);
-          toast.show(`🎉 Chào mừng ${userData.fullName || userData.email}!`, { type: 'success', duration: 2000 });
+          toast.show(`Chào mừng ${userData.fullName || userData.email}!`, { type: 'success', duration: 2000 });
           
           // Check if there's a return URL
           const returnUrl = localStorage.getItem('returnUrl');
@@ -41,7 +41,7 @@ const GoogleCallback = () => {
           }
         } catch (err) {
           console.error('Google callback error:', err);
-          toast.show('❌ Không thể lấy thông tin người dùng', { type: 'error' });
+          toast.show('Không thể lấy thông tin người dùng', { type: 'error' });
           navigate('/login');
         }
       } else {

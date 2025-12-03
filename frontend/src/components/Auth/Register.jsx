@@ -1,7 +1,6 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { FaEye, FaEyeSlash, FaHouse } from 'react-icons/fa6';
-import { FaInfoCircle } from 'react-icons/fa';
 import { useToast } from '../../ui/Toast';
 import VI from '../../constants/vi';
 import TermsModal from './TermsModal';
@@ -191,14 +190,14 @@ const Register = () => {
         throw new Error(data.error || 'Failed to send OTP');
       }
 
-      toast.show('✉️ Mã OTP đã được gửi đến email của bạn!', { type: 'success', duration: 3000 });
+      toast.show('Mã OTP đã được gửi đến email của bạn!', { type: 'success', duration: 3000 });
       
       // Navigate to OTP verification page with form data
       navigate('/verify-otp', { state: formData });
     } catch (err) {
       const errorMsg = err.message || 'Không thể gửi mã xác thực. Vui lòng thử lại.';
       setError(errorMsg);
-      toast.show(`❌ ${errorMsg}`, { type: 'error', duration: 3500 });
+      toast.show(`${errorMsg}`, { type: 'error', duration: 3500 });
     } finally {
       setLoading(false);
     }

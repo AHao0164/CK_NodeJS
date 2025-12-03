@@ -1,4 +1,3 @@
-// Mapping category names to Vietnamese display names and icons
 export const CATEGORY_VI_MAPPING = {
   // Laptop categories (từ seed.js)
   'Laptop Gaming': { name: 'Laptop Gaming', icon: '/images/MegaMenu/icons/laptop.svg' },

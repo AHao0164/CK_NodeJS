@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Box,
   Card,
@@ -16,7 +16,7 @@ import { Save, Person, Phone, LocationOn } from '@mui/icons-material';
 import { useAuth } from '../state/AuthContext.jsx';
 
 export default function AdminProfilePage() {
-  const { api, user } = useAuth();
+  const { api } = useAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notification, setNotification] = useState({ open: false, message: '', severity: 'success' });

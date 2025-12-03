@@ -101,9 +101,32 @@ export default function AIChatbot() {
 
       const data = await response.json();
 
+      // Kiểm tra nếu có lỗi (ví dụ: hình ảnh không liên quan đến điện tử)
+      if (data.error) {
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: data.error || 'Hình ảnh không phù hợp. Vui lòng upload hình ảnh sản phẩm điện tử hoặc phụ kiện điện tử.'
+        }]);
+        showToast(data.error || 'Hình ảnh không phù hợp', 'warning');
+        return;
+      }
+
+      // Nếu không có matches và không có error, có thể là không tìm thấy sản phẩm tương tự
+      if (!data.matches || data.matches.length === 0) {
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: data.description || 'Đã phân tích hình ảnh nhưng không tìm thấy sản phẩm tương tự trong cửa hàng. Vui lòng thử với hình ảnh khác hoặc mô tả sản phẩm bạn đang tìm.'
+        }]);
+        if (data.searchKeywords && data.searchKeywords.length > 0) {
+          showToast(`Gợi ý từ khóa: ${data.searchKeywords.join(', ')}`, 'info');
+        }
+        return;
+      }
+
+      // Có matches - hiển thị kết quả
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: data.description || 'Đã phân tích hình ảnh thành công.',
+        content: data.description || 'Đã phân tích hình ảnh thành công. Dưới đây là các sản phẩm tương tự:',
         matches: data.matches || [],
         products: data.products || [],
         searchKeywords: data.searchKeywords || []
@@ -111,14 +134,15 @@ export default function AIChatbot() {
 
       if (data.products && data.products.length > 0) {
         setSuggestedProducts(data.products);
+        showToast(`Tìm thấy ${data.products.length} sản phẩm tương tự`, 'success');
       }
     } catch (error) {
       console.error('Image search error:', error);
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: 'Xin lỗi, không thể phân tích hình ảnh. Vui lòng thử lại.'
+        content: 'Xin lỗi, không thể phân tích hình ảnh. Vui lòng thử lại hoặc kiểm tra kết nối mạng.'
       }]);
-      showToast('Không thể phân tích hình ảnh.', 'error');
+      showToast('Không thể phân tích hình ảnh. Vui lòng thử lại.', 'error');
     } finally {
       setLoading(false);
     }

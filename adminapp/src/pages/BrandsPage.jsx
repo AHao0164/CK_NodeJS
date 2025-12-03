@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Box,
   Button,
@@ -85,10 +85,10 @@ export default function BrandsPage() {
       setDescription('');
       setDisplayOrder('');
       await load();
-      toast.success('✅ Thêm hãng thành công!');
+      toast.success('Thêm hãng thành công!');
     } catch (error) {
       console.error('Failed to add brand:', error);
-      toast.error('❌ Thêm hãng thất bại: ' + (error.response?.data?.error || error.message));
+      toast.error('Thêm hãng thất bại: ' + (error.response?.data?.error || error.message));
     }
   };
 
@@ -104,10 +104,10 @@ export default function BrandsPage() {
       setEditDialog(false);
       setEditForm({ id: null, name: '', icon: '', description: '', displayOrder: 0 });
       await load();
-      toast.success('✅ Cập nhật hãng thành công!');
+      toast.success('Cập nhật hãng thành công!');
     } catch (error) {
       console.error('Failed to update brand:', error);
-      toast.error('❌ Cập nhật hãng thất bại: ' + (error.response?.data?.error || error.message));
+      toast.error('Cập nhật hãng thất bại: ' + (error.response?.data?.error || error.message));
     }
   };
 
@@ -116,10 +116,10 @@ export default function BrandsPage() {
     try {
       await api.delete(`/admin/catalog/brands/${id}`);
       await load();
-      toast.success('✅ Xóa hãng thành công!');
+      toast.success('Xóa hãng thành công!');
     } catch (error) {
       console.error('Failed to delete brand:', error);
-      toast.error('❌ Xóa hãng thất bại: ' + (error.response?.data?.error || error.message));
+      toast.error('Xóa hãng thất bại: ' + (error.response?.data?.error || error.message));
     }
   };
 
@@ -130,10 +130,10 @@ export default function BrandsPage() {
       await api.post('/admin/catalog/brands/bulk-delete', { ids: selectedIds });
       setSelectedIds([]);
       await load();
-      toast.success(`✅ Đã xóa ${selectedIds.length} hãng!`);
+      toast.success(`Đã xóa ${selectedIds.length} hãng!`);
     } catch (error) {
       console.error('Failed to bulk delete:', error);
-      toast.error('❌ Xóa hàng loạt thất bại: ' + (error.response?.data?.error || error.message));
+      toast.error('Xóa hàng loạt thất bại: ' + (error.response?.data?.error || error.message));
     }
   };
 

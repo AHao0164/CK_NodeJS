@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { FaHouse, FaEnvelope } from 'react-icons/fa6';
 import { useAuth } from '../../context/AuthContext';
@@ -74,7 +74,7 @@ const OTPVerification = () => {
       if (response.ok) {
         setTimeLeft(120); // Reset timer to 2 minutes
         setOtp(['', '', '', '', '', '']); // Clear OTP
-        toast.show('✅ Mã OTP mới đã được gửi đến email của bạn', { type: 'success', duration: 3000 });
+        toast.show('Mã OTP mới đã được gửi đến email của bạn', { type: 'success', duration: 3000 });
       } else {
         const data = await response.json();
         throw new Error(data.error || 'Failed to resend OTP');
@@ -82,7 +82,7 @@ const OTPVerification = () => {
     } catch (err) {
       const errorMsg = err.message || 'Không thể gửi lại mã OTP';
       setError(errorMsg);
-      toast.show(`❌ ${errorMsg}`, { type: 'error', duration: 3500 });
+      toast.show(`${errorMsg}`, { type: 'error', duration: 3500 });
     } finally {
       setResending(false);
     }
@@ -125,7 +125,7 @@ const OTPVerification = () => {
 
       // Login with the token
       login(data.token, data.user);
-      toast.show(`🎉 Đăng ký thành công! Chào mừng ${data.user.fullName || data.user.email}`, { type: 'success', duration: 2500 });
+      toast.show(`Đăng ký thành công! Chào mừng ${data.user.fullName || data.user.email}`, { type: 'success', duration: 2500 });
 
       // Check if there's a return URL
       const returnUrl = localStorage.getItem('returnUrl');
@@ -138,7 +138,7 @@ const OTPVerification = () => {
     } catch (err) {
       const errorMsg = err.message || 'Mã OTP không đúng hoặc đã hết hạn';
       setError(errorMsg);
-      toast.show(`❌ ${errorMsg}`, { type: 'error', duration: 3500 });
+      toast.show(`${errorMsg}`, { type: 'error', duration: 3500 });
     } finally {
       setLoading(false);
     }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Box,
   Button,
@@ -23,7 +23,7 @@ import {
   Switch,
   FormControlLabel,
 } from '@mui/material';
-import { Add, Edit, Delete, LocalOffer, DeleteSweep, Schedule, CheckCircle, Error as ErrorIcon } from '@mui/icons-material';
+import { Add, Edit, Delete, LocalOffer, DeleteSweep, CheckCircle, Error as ErrorIcon } from '@mui/icons-material';
 import { useAuth } from '../state/AuthContext.jsx';
 
 export default function PromotionsPage() {
@@ -40,11 +40,6 @@ export default function PromotionsPage() {
 
   useEffect(() => {
     loadPromotions();
-    
-    // Auto-refresh every 5 seconds to show deleted expired coupons in real-time
-    const interval = setInterval(() => {
-      loadPromotions();
-    }, 5000);
     
     return () => clearInterval(interval);
   }, []);
@@ -88,10 +83,10 @@ export default function PromotionsPage() {
       setForm({});
       setValueDisplay('');
       await loadPromotions();
-      setSnackbar({ open: true, message: form.id ? '✓ Cập nhật mã giảm giá thành công!' : '✓ Thêm mã giảm giá thành công!', severity: 'success' });
+      setSnackbar({ open: true, message: form.id ? 'Cập nhật mã giảm giá thành công!' : 'Thêm mã giảm giá thành công!', severity: 'success' });
     } catch (error) {
       console.error('Failed to save promotion:', error);
-      setSnackbar({ open: true, message: '✗ Lưu thất bại: ' + (error.response?.data?.error || error.message), severity: 'error' });
+      setSnackbar({ open: true, message: 'Lưu thất bại: ' + (error.response?.data?.error || error.message), severity: 'error' });
     } finally {
       setLoading(false);
     }
@@ -102,42 +97,16 @@ export default function PromotionsPage() {
       setLoading(true);
       await api.delete(`/admin/coupons/${id}`);
       await loadPromotions();
-      setSnackbar({ open: true, message: '✓ Đã xóa mã giảm giá!', severity: 'success' });
+      setSnackbar({ open: true, message: 'Đã xóa mã giảm giá!', severity: 'success' });
     } catch (error) {
       console.error('Failed to delete promotion:', error);
-      setSnackbar({ open: true, message: '✗ Xóa thất bại!', severity: 'error' });
+      setSnackbar({ open: true, message: 'Xóa thất bại!', severity: 'error' });
     } finally {
       setLoading(false);
     }
   };
 
-  const handleBulkDeleteExpired = async () => {
-    try {
-      setLoading(true);
-      const { data } = await api.delete('/admin/coupons/expired/bulk');
-      await loadPromotions();
-      setSnackbar({ open: true, message: `✓ Đã xóa ${data.deleted} mã giảm giá hết hạn!`, severity: 'success' });
-    } catch (error) {
-      console.error('Failed to bulk delete:', error);
-      setSnackbar({ open: true, message: '✗ Xóa hàng loạt thất bại!', severity: 'error' });
-    } finally {
-      setLoading(false);
-    }
-  };
 
-  const handleAutoDisable = async () => {
-    try {
-      setLoading(true);
-      const { data } = await api.post('/admin/coupons/auto-disable');
-      await loadPromotions();
-      setSnackbar({ open: true, message: `✓ Đã vô hiệu hóa ${data.disabled} mã hết hạn!`, severity: 'success' });
-    } catch (error) {
-      console.error('Failed to auto-disable:', error);
-      setSnackbar({ open: true, message: '✗ Vô hiệu hóa thất bại!', severity: 'error' });
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const getStatusColor = (promo) => {
     const now = new Date();
@@ -203,10 +172,10 @@ export default function PromotionsPage() {
       const deletedCount = selectedIds.length;
       setSelectedIds([]);
       await loadPromotions();
-      setSnackbar({ open: true, message: `✓ Đã xóa ${deletedCount} mã giảm giá!`, severity: 'success' });
+      setSnackbar({ open: true, message: `Đã xóa ${deletedCount} mã giảm giá!`, severity: 'success' });
     } catch (error) {
       console.error('Failed to bulk delete:', error);
-      setSnackbar({ open: true, message: '✗ Xóa hàng loạt thất bại!', severity: 'error' });
+      setSnackbar({ open: true, message: 'Xóa hàng loạt thất bại!', severity: 'error' });
     } finally {
       setLoading(false);
     }
@@ -527,7 +496,7 @@ export default function PromotionsPage() {
             </Grid>
             {form.end_date && (
               <Alert severity="warning" sx={{ mt: 1 }}>
-                ⚠️ Mã sẽ tự động vô hiệu hóa và XÓA NGAY khi hết hạn!
+                Mã sẽ tự động vô hiệu hóa và XÓA NGAY khi hết hạn!
               </Alert>
             )}
             <FormControlLabel

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams, Link, useNavigate } from 'react-router-dom'
 import { listProducts } from '../services/catalog'
 import { motion } from 'framer-motion'
@@ -91,7 +91,7 @@ export default function Products() {
 					priceCents: finalPrice // Use discounted price
 				})
 				await refreshCart()
-				toast.show('✓ Đã thêm vào giỏ hàng', { type: 'success' })
+				toast.show('Đã thêm vào giỏ hàng', { type: 'success' })
 			} else {
 				let guestCartId = sessionStorage.getItem('guestCartId')
 				const { guestCartId: newGuestCartId, items } = await addGuestItemToCart({
@@ -103,10 +103,10 @@ export default function Products() {
 				sessionStorage.setItem('guestCartId', newGuestCartId)
 				sessionStorage.setItem('guestCartItems', JSON.stringify(items))
 				await refreshCart()
-				toast.show('✓ Đã thêm vào giỏ hàng', { type: 'success' })
+				toast.show('Đã thêm vào giỏ hàng', { type: 'success' })
 			}
 		} catch (e) {
-			toast.show('❌ Lỗi khi thêm vào giỏ hàng', { type: 'error' })
+			toast.show('Lỗi khi thêm vào giỏ hàng', { type: 'error' })
 		} finally {
 			setAddingToCart(prev => {
 				const next = new Set(prev)
@@ -122,7 +122,6 @@ export default function Products() {
 		const discountPercent = Number(p.discount_percent || 0);
 		const finalPrice = Math.round(originalPrice * (100 - discountPercent) / 100);
 		
-		// ✅ Mua ngay: Chuyển thẳng đến checkout, không qua giỏ hàng
 		if (token) {
 			try {
 				// Thêm vào giỏ để có item trong cart
@@ -150,7 +149,7 @@ export default function Products() {
 					navigate('/cart')
 				}
 			} catch (e) {
-				toast.show('❌ Lỗi khi thêm vào giỏ hàng', { type: 'error' })
+				toast.show('Lỗi khi thêm vào giỏ hàng', { type: 'error' })
 			}
 		} else {
 			navigate('/checkout', {

@@ -19,11 +19,7 @@ export default function Banner() {
       .finally(() => { if (!ignore) setLoading(false) })
     return () => { ignore = true }
   }, [])
-
-  // Layout theo ảnh bạn cung cấp: 
-  // Row 1: 1 nhỏ, 1 lớn, 1 nhỏ
-  // Row 2: 1 rất lớn (full width)
-  // Row 3: 1 nhỏ, 1 lớn
+ 
   const getGridClass = (idx) => {
     // Banner 0: nhỏ bên trái
     if (idx === 0) return 'col-span-1 row-span-1'
@@ -41,7 +37,6 @@ export default function Banner() {
   }
 
   const getHeightClass = (idx) => {
-    // Banner lớn có chiều cao hơn
     if (idx === 1 || idx === 3 || idx === 5) return 'min-h-[280px] md:min-h-[320px]'
     return 'min-h-[200px] md:min-h-[240px]'
   }

@@ -305,7 +305,7 @@ const ProductDetail = () => {
     
     // Join product room when connected
     socket.on('connect', () => {
-      console.log('✅ WebSocket connected for real-time updates');
+      console.log('WebSocket connected for real-time updates');
       socket.emit('join-product', productId);
       // Clear polling if WebSocket connects successfully
       if (pollingInterval) {
@@ -544,8 +544,7 @@ const ProductDetail = () => {
       return;
     }
     
-    // ✅ Frontend validation: Chỉ check số lượng đang thêm, KHÔNG tính số lượng đã có trong giỏ
-    // Stock sẽ được check lại khi checkout và chỉ trừ khi thanh toán xong
+    // Stock validation
     if (availableStock === 0) {
       toast.show('Sản phẩm đã hết hàng', { type: 'error' });
       return;
@@ -617,7 +616,7 @@ const ProductDetail = () => {
       return;
     }
 
-    // ✅ Frontend validation: Check stock before buy now
+    // Stock validation
     if (availableStock === 0) {
       toast.show('Sản phẩm đã hết hàng', { type: 'error' });
       return;
@@ -650,8 +649,7 @@ const ProductDetail = () => {
     const priceCents = selectedVariant ? selectedVariant.price_cents : (product.price_cents || product.originalPrice || product.price);
     const variantId = selectedVariant ? selectedVariant.id : null;
 
-    // ✅ Mua ngay: Chuyển thẳng đến checkout, không qua giỏ hàng
-    // Đã đăng nhập: Thêm vào giỏ tạm thời rồi chuyển đến checkout với selectedItems
+    // Stock validation
     if (token) {
       try {
         setError('');
@@ -690,7 +688,7 @@ const ProductDetail = () => {
       return;
     }
 
-    // Khách chưa đăng nhập: chuyển thẳng tới trang thanh toán với thông tin sản phẩm
+    // Customers (not logged in): proceed to checkout with guest item
     try {
       setError('');
       navigate('/checkout', {
@@ -1287,7 +1285,7 @@ const ProductDetail = () => {
             ) : (
               <div className="mb-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
                 <p className="text-sm text-yellow-800 dark:text-yellow-200">
-                  ⭐ Để đánh giá bằng sao, vui lòng{' '}
+                  Để đánh giá bằng sao, vui lòng{' '}
                   <button
                     onClick={() => {
                       localStorage.setItem('returnUrl', window.location.pathname);

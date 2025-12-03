@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Box,
   Button,
@@ -21,7 +21,7 @@ import {
   Chip,
   Tooltip,
 } from '@mui/material';
-import { Delete, Add, Category, Edit, Search, DeleteSweep, ArrowUpward, ArrowDownward, FileDownload } from '@mui/icons-material';
+import { Delete, Add, Category, Edit, Search, DeleteSweep, FileDownload } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { useAuth } from '../state/AuthContext.jsx';
 import { exportToExcel, formatCategoriesForExport } from '../utils/exportExcel';
@@ -85,10 +85,10 @@ export default function CategoriesPage() {
       setDescription('');
       setDisplayOrder('');
       await load();
-      toast.success('✅ Thêm danh mục thành công!');
+      toast.success('Thêm danh mục thành công!');
     } catch (error) {
       console.error('Failed to add category:', error);
-      toast.error('❌ Thêm danh mục thất bại: ' + (error.response?.data?.error || error.message));
+      toast.error('Thêm danh mục thất bại: ' + (error.response?.data?.error || error.message));
     }
   };
 
@@ -104,10 +104,10 @@ export default function CategoriesPage() {
       setEditDialog(false);
       setEditForm({ id: null, name: '', icon: '', description: '', displayOrder: 0 });
       await load();
-      toast.success('✅ Cập nhật danh mục thành công!');
+      toast.success('Cập nhật danh mục thành công!');
     } catch (error) {
       console.error('Failed to update category:', error);
-      toast.error('❌ Cập nhật danh mục thất bại: ' + (error.response?.data?.error || error.message));
+      toast.error('Cập nhật danh mục thất bại: ' + (error.response?.data?.error || error.message));
     }
   };
 
@@ -116,10 +116,10 @@ export default function CategoriesPage() {
     try {
       await api.delete(`/admin/catalog/categories/${id}`);
       await load();
-      toast.success('✅ Xóa danh mục thành công!');
+      toast.success('Xóa danh mục thành công!');
     } catch (error) {
       console.error('Failed to delete category:', error);
-      toast.error('❌ Xóa danh mục thất bại: ' + (error.response?.data?.error || error.message));
+      toast.error('Xóa danh mục thất bại: ' + (error.response?.data?.error || error.message));
     }
   };
 
@@ -130,10 +130,10 @@ export default function CategoriesPage() {
       await api.post('/admin/catalog/categories/bulk-delete', { ids: selectedIds });
       setSelectedIds([]);
       await load();
-      toast.success(`✅ Đã xóa ${selectedIds.length} danh mục!`);
+      toast.success(`Đã xóa ${selectedIds.length} danh mục!`);
     } catch (error) {
       console.error('Failed to bulk delete:', error);
-      toast.error('❌ Xóa hàng loạt thất bại: ' + (error.response?.data?.error || error.message));
+      toast.error('Xóa hàng loạt thất bại: ' + (error.response?.data?.error || error.message));
     }
   };
 

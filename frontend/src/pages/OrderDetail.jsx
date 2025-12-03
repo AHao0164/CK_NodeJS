@@ -36,7 +36,6 @@ export default function OrderDetail() {
   const [loading, setLoading] = useState(true)
   const [cancelling, setCancelling] = useState(false)
   const [statusHistory, setStatusHistory] = useState([])
-  const [loadingHistory, setLoadingHistory] = useState(false)
 
   useEffect(() => {
     document.title = `Chi tiết đơn hàng #${id} - GearUp`;

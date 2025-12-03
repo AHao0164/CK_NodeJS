@@ -1,9 +1,5 @@
 import { createClient } from 'redis';
 
-/**
- * Redis Event Bus for Pub/Sub messaging
- * Enables async communication between microservices
- */
 class RedisEventBus {
   constructor(redisUrl) {
     const url = redisUrl || `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`;
@@ -27,7 +23,7 @@ class RedisEventBus {
         this.subscriber.connect()
       ]);
       this.isConnected = true;
-      console.log('✅ Redis Event Bus connected');
+      console.log('Redis Event Bus connected');
     }
   }
 
@@ -44,7 +40,7 @@ class RedisEventBus {
         this.subscriber.quit()
       ]);
       this.isConnected = false;
-      console.log('✅ Redis Event Bus disconnected');
+      console.log('Redis Event Bus disconnected');
     }
   }
 
@@ -67,20 +63,14 @@ class RedisEventBus {
       });
 
       const subscribers = await this.publisher.publish(channel, message);
-      console.log(`📤 Published event: ${channel} (${subscribers} subscribers)`);
+      console.log(`Published event: ${channel} (${subscribers} subscribers)`);
       return subscribers;
     } catch (error) {
-      console.error(`❌ Error publishing event ${channel}:`, error.message);
+      console.error(`Error publishing event ${channel}:`, error.message);
       throw error;
     }
   }
 
-  /**
-   * Subscribe to a channel
-   * @param {string} channel - Channel name
-   * @param {Function} handler - Event handler function
-   * @returns {Promise<void>}
-   */
   async subscribe(channel, handler) {
     if (!this.isConnected) {
       await this.connect();
@@ -100,28 +90,22 @@ class RedisEventBus {
             handlers.forEach(h => {
               // Execute handler asynchronously to avoid blocking
               Promise.resolve(h(event.data, event)).catch(err => {
-                console.error(`❌ Error in event handler for ${channel}:`, err);
+                console.error(`Error in event handler for ${channel}:`, err);
               });
             });
           }
         } catch (error) {
-          console.error(`❌ Error parsing event message from ${channel}:`, error.message);
+          console.error(`Error parsing event message from ${channel}:`, error.message);
         }
       });
       
-      console.log(`📥 Subscribed to channel: ${channel}`);
+      console.log(`Subscribed to channel: ${channel}`);
     }
 
     // Add handler
     this.subscriptions.get(channel).add(handler);
   }
 
-  /**
-   * Unsubscribe from a channel
-   * @param {string} channel - Channel name
-   * @param {Function} handler - Optional handler to remove (if not provided, removes all)
-   * @returns {Promise<void>}
-   */
   async unsubscribe(channel, handler = null) {
     if (!this.subscriptions.has(channel)) {
       return;
@@ -143,10 +127,6 @@ class RedisEventBus {
     }
   }
 
-  /**
-   * Get list of subscribed channels
-   * @returns {string[]}
-   */
   getSubscribedChannels() {
     return Array.from(this.subscriptions.keys());
   }

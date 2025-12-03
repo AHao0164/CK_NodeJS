@@ -1,4 +1,3 @@
-import React from 'react'
 import TiltEffect from '../ui/TiltEffect'
 import { useNavigate } from 'react-router-dom'
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useToast } from '../ui/Toast';
 import { FaEye, FaEyeSlash, FaHome, FaEnvelope, FaLock, FaKey } from 'react-icons/fa';
@@ -48,14 +48,14 @@ const ForgotPassword = () => {
       const data = await response.json();
 
       if (response.ok) {
-        toast.show('✅ Mã OTP đã được gửi đến email của bạn', { type: 'success' });
+        toast.show('Mã OTP đã được gửi đến email của bạn', { type: 'success' });
         setStep(2);
         setCountdown(120); // 2 minutes
       } else {
-        toast.show(`❌ ${data.error || 'Không thể gửi OTP'}`, { type: 'error' });
+        toast.show(`${data.error || 'Không thể gửi OTP'}`, { type: 'error' });
       }
     } catch (error) {
-      toast.show('❌ Lỗi kết nối đến server', { type: 'error' });
+      toast.show('Lỗi kết nối đến server', { type: 'error' });
     } finally {
       setLoading(false);
     }
@@ -73,7 +73,7 @@ const ForgotPassword = () => {
     }
     
     if (countdown === 0) {
-      toast.show('⚠️ Mã OTP đã hết hạn. Vui lòng gửi lại mã mới', { type: 'error' });
+      toast.show('Mã OTP đã hết hạn. Vui lòng gửi lại mã mới', { type: 'error' });
       return;
     }
 
@@ -89,13 +89,13 @@ const ForgotPassword = () => {
       const data = await response.json();
 
       if (response.ok) {
-        toast.show('✅ Xác thực OTP thành công', { type: 'success' });
+        toast.show('Xác thực OTP thành công', { type: 'success' });
         setStep(3);
       } else {
-        toast.show(`❌ ${data.error || 'Mã OTP không hợp lệ '}`, { type: 'error' });
+        toast.show(`${data.error || 'Mã OTP không hợp lệ '}`, { type: 'error' });
       }
     } catch (error) {
-      toast.show('❌ Lỗi kết nối đến server', { type: 'error' });
+      toast.show('Lỗi kết nối đến server', { type: 'error' });
     } finally {
       setLoading(false);
     }
@@ -130,13 +130,13 @@ const ForgotPassword = () => {
       const data = await response.json();
 
       if (response.ok) {
-        toast.show('✅ Đặt lại mật khẩu thành công! Đang chuyển đến trang đăng nhập...', { type: 'success', duration: 3000 });
+        toast.show('Đặt lại mật khẩu thành công! Đang chuyển đến trang đăng nhập...', { type: 'success', duration: 3000 });
         setTimeout(() => navigate('/login'), 2000);
       } else {
-        toast.show(`❌ ${data.error || 'Không thể đặt lại mật khẩu'}`, { type: 'error' });
+        toast.show(`${data.error || 'Không thể đặt lại mật khẩu'}`, { type: 'error' });
       }
     } catch (error) {
-      toast.show('❌ Lỗi kết nối đến server', { type: 'error' });
+      toast.show('Lỗi kết nối đến server', { type: 'error' });
     } finally {
       setLoading(false);
     }
@@ -260,7 +260,7 @@ const ForgotPassword = () => {
 
             {countdown === 0 && (
               <div className="text-center text-sm text-red-600 font-semibold">
-                ⚠️ Mã OTP đã hết hạn! Vui lòng gửi lại mã mới.
+                Mã OTP đã hết hạn! Vui lòng gửi lại mã mới.
               </div>
             )}
 
@@ -345,7 +345,7 @@ const ForgotPassword = () => {
             </div>
 
             {newPassword && confirmPassword && newPassword !== confirmPassword && (
-              <p className="text-red-600 text-sm">⚠️ Mật khẩu xác nhận không khớp</p>
+              <p className="text-red-600 text-sm">Mật khẩu xác nhận không khớp</p>
             )}
 
             <button
