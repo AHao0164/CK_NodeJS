@@ -1,7 +1,37 @@
 {
-  "dependencies": {
-    "axios": "^1.13.2",
-    "mysql2": "^3.15.3",
-    "redis": "^5.10.0"
+  "name": "pcshop",
+  "version": "1.0.0",
+  "description": "E-Commerce Platform with Microservices Architecture",
+  "private": true,
+  "workspaces": [
+    "services/*",
+    "gateway/*",
+    "frontend",
+    "adminapp"
+  ],
+  "scripts": {
+    "install:all": "npm install --workspaces",
+    "dev": "docker-compose up -d",
+    "dev:services": "npm run dev --workspaces",
+    "build": "npm run build --workspaces",
+    "clean": "docker-compose down -v && rm -rf node_modules */node_modules **/node_modules",
+    "db:init": "mysql -h localhost -u root -prootpw < db/init-unified.sql",
+    "seed": "node tools/seed/seed.js"
+  },
+  "keywords": [
+    "e-commerce",
+    "microservices",
+    "nodejs",
+    "react",
+    "docker"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "devDependencies": {
+    "docker-compose": "^4.5.0"
   }
 }
