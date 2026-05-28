@@ -1,10 +1,5 @@
 # 🛒 PCShop - E-Commerce Platform
 
-> Hệ thống thương mại điện tử với kiến trúc Microservices hiện đại
-
-[![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-
 ## 📋 Mô Tả Dự Án
 
 PCShop là một nền tảng thương mại điện tử được xây dựng với kiến trúc **Microservices**, sử dụng các công nghệ hiện đại như Node.js, Redis, MySQL, Docker và CI/CD. Dự án thể hiện khả năng thiết kế và triển khai hệ thống phân tán quy mô lớn.
@@ -261,31 +256,3 @@ mysql -u root -p < init-unified.sql
 # Seed data
 node tools/seed/seed.js
 ```
-
-## 📈 Kinh Nghiệm Thể Hiện Qua Dự Án
-
-### Technical Skills
-- ✅ **System Design**: Thiết kế kiến trúc Microservices từ đầu
-- ✅ **Distributed Systems**: Event-driven communication, Redis pub/sub
-- ✅ **Database Design**: Schema optimization, indexing, replication
-- ✅ **API Design**: RESTful APIs, authentication patterns
-- ✅ **DevOps**: Docker, CI/CD, infrastructure as code
-- ✅ **Security**: JWT, OAuth 2.0, bcrypt, input validation
-- ✅ **Performance**: Redis caching, Elasticsearch, query optimization
-
-### Soft Skills
-- ✅ Project architecture & planning
-- ✅ Code organization & maintainability
-- ✅ Problem solving & debugging
-- ✅ Documentation writing
-- ✅ Version control (Git)
-
-## 📝 License
-
-MIT License - Tự do sử dụng cho mục đích học tập và phát triển.
-
----
-
-**Author**: [Your Name]  
-**Project Duration**: [Start Date] - [End Date]  
-**Role**: Full-Stack Developer / System Architect
